@@ -14,10 +14,10 @@ void main()
     if (!GetIsPC(oPC) || GetLocalInt(oPC, WTHR_SKIP)) return;
 
     WthrStartLoop(oPC);
-    int bHooked = WthrHookPlayer(oPC);
-    if (GetLocalInt(GetModule(), WTHR_DEBUG))  // later, so it isn't lost while the player loads in
-        DelayCommand(4.0, SendMessageToPC(oPC, bHooked
-            ? "NWN-Weathered: the game accepted an OnDamaged script on you; hit point checks run until it fires."
-            : "NWN-Weathered: players can't have an OnDamaged script here; blood uses hit point checks."));
+    // Players' blood comes from their own OnDamaged. Only a refusal is
+    // worth a word: then players get no blood.
+    if (!WthrHookPlayer(oPC) && GetLocalInt(GetModule(), WTHR_DEBUG))  // later, so it isn't lost while loading in
+        DelayCommand(4.0, SendMessageToPC(oPC,
+            "NWN-Weathered: the game refused an OnDamaged script on you, so you get no blood."));
     if (WthrHasAny(oPC)) DelayCommand(1.0, WthrRefresh(oPC));
 }

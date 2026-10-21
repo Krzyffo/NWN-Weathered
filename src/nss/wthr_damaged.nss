@@ -21,12 +21,6 @@ void main()
 
     int bPC = GetIsPC(oSelf);
     int bDebug = GetLocalInt(GetModule(), WTHR_DEBUG);
-    // A player's OnDamaged works: their hit point check can stop.
-    if (bPC && !GetLocalInt(oSelf, WTHR_VAR_PC_EVENTS))
-    {
-        SetLocalInt(oSelf, WTHR_VAR_PC_EVENTS, TRUE);
-        if (bDebug) SendMessageToPC(oSelf, "NWN-Weathered: your OnDamaged event works; blood uses it from now on.");
-    }
 
     object oDamager = GetLastDamager(oSelf);
     int nTotal = GetTotalDamageDealt();

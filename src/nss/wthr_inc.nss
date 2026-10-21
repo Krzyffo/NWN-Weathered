@@ -734,24 +734,16 @@ void WthrHookDamage(object oCreature)
     }
 }
 
-// On a player: their OnDamaged is ours (TRUE once the game accepted it),
-// and it has fired at least once, so the hit point check can stop.
-const string WTHR_VAR_PC_HOOKED = "WTHR_PC_HOOKED";
-const string WTHR_VAR_PC_EVENTS = "WTHR_PC_EVENTS";
-
-// Tries to put wthr_damaged on a player's own OnDamaged, keeping any script
-// already there. Classic NWN gave players no creature events; whether this
-// works depends on the game. Until the event has fired once, the player's
-// loop keeps checking hit points as well (WthrWatchHitPoints), so blood
-// works either way. Returns TRUE if the game accepted the script.
+// Puts wthr_damaged on a player's own OnDamaged, keeping any script
+// already there. Classic NWN gave players no creature events; EE accepts
+// it. Returns FALSE if the game refused, in which case players get no
+// blood of their own and give no spatter.
 int WthrHookPlayer(object oPC)
 {
-    DeleteLocalInt(oPC, WTHR_VAR_PC_EVENTS);  // prove it again after each login
     string sOwn = GetEventScript(oPC, EVENT_SCRIPT_CREATURE_ON_DAMAGED);
-    if (sOwn != "wthr_damaged") SetLocalString(oPC, WTHR_VAR_ORIG_DMG, sOwn);
-    int bOk = sOwn == "wthr_damaged" || SetEventScript(oPC, EVENT_SCRIPT_CREATURE_ON_DAMAGED, "wthr_damaged");
-    SetLocalInt(oPC, WTHR_VAR_PC_HOOKED, bOk);
-    return bOk;
+    if (sOwn == "wthr_damaged") return TRUE;
+    SetLocalString(oPC, WTHR_VAR_ORIG_DMG, sOwn);
+    return SetEventScript(oPC, EVENT_SCRIPT_CREATURE_ON_DAMAGED, "wthr_damaged");
 }
 
 // The player's game decides whether they see blood: gore off hides it on
@@ -904,7 +896,6 @@ const string WTHR_VAR_GEN      = "WTHR_GEN";       // int: the running loop's nu
 const string WTHR_VAR_AREA     = "WTHR_AREA";      // object: area at the last update
 const string WTHR_VAR_LAST_POS = "WTHR_LAST_POS";  // location at the last update
 const string WTHR_VAR_TICKS    = "WTHR_TICKS";     // int: updates so far
-const string WTHR_VAR_LAST_HP  = "WTHR_LAST_HP";   // int: a player's hit points + 1 at the last update
 
 const float WTHR_TICK         = 2.0;   // seconds between updates
 const float WTHR_MOVED        = 1.0;   // metres per update that count as travelling
@@ -946,51 +937,20 @@ void WthrReadyForBlood(object oCreature)
         WthrHookDamage(oCreature);
 }
 
-// Each update looks at who is fighting a player: whoever they attack, and
-// every creature nearby attacking them, gets its blood watched right away.
-// Until the player's own OnDamaged has fired (WthrHookPlayer), a drop in
-// hit points since the last update
-// is a weapon hit when someone is attacking them: the nearest attacker in
-// melee range gets the spatter; if only archers are attacking, it's wounds
-// alone. With no attacker at all (a spell, a trap) it leaves no blood.
-void WthrWatchHitPoints(object oPC)
+// Each update gets the creatures fighting a player ready for blood right
+// away (whoever the player attacks, and everyone nearby attacking them),
+// instead of waiting for the next sweep: a monster that spawns and charges
+// bleeds from its first blow.
+void WthrWatchFight(object oPC)
 {
     WthrReadyForBlood(GetAttackTarget(oPC));
-
-    object oMelee = OBJECT_INVALID;
-    float fMelee = WTHR_FIGHT_RANGE;
-    int bRanged = FALSE;
     location lHere = GetLocation(oPC);
     object o = GetFirstObjectInShape(SHAPE_SPHERE, WTHR_FIGHT_RANGE, lHere, FALSE, OBJECT_TYPE_CREATURE);
     while (GetIsObjectValid(o))
     {
-        if (o != oPC && !GetIsDead(o) && GetAttackTarget(o) == oPC)
-        {
-            WthrReadyForBlood(o);
-            if (WthrIsMelee(o, oPC))
-            {
-                float fDistance = GetDistanceBetween(o, oPC);
-                if (fDistance < fMelee)
-                {
-                    oMelee = o;
-                    fMelee = fDistance;
-                }
-            }
-            else
-                bRanged = TRUE;
-        }
+        if (o != oPC && !GetIsDead(o) && GetAttackTarget(o) == oPC) WthrReadyForBlood(o);
         o = GetNextObjectInShape(SHAPE_SPHERE, WTHR_FIGHT_RANGE, lHere, FALSE, OBJECT_TYPE_CREATURE);
     }
-
-    if (GetLocalInt(oPC, WTHR_VAR_PC_EVENTS)) return;  // OnDamaged does it
-    int nNow = GetCurrentHitPoints(oPC);
-    int nLast = GetLocalInt(oPC, WTHR_VAR_LAST_HP) - 1;
-    SetLocalInt(oPC, WTHR_VAR_LAST_HP, nNow + 1);
-    if (nLast < 0 || nNow >= nLast) return;
-    if (GetIsObjectValid(oMelee))
-        WthrPhysicalDamage(oPC, oMelee, nLast - nNow);
-    else if (bRanged)
-        WthrPhysicalDamage(oPC, OBJECT_INVALID, nLast - nNow);
 }
 
 // One update of a creature with a loop: a player (with their party) or a
@@ -1012,7 +972,7 @@ void WthrTick(object oCreature, int nGen)
 
     if (bPC)
     {
-        WthrWatchHitPoints(oCreature);
+        WthrWatchFight(oCreature);
         if (nTicks % WTHR_GORE_TICKS == 1) WthrApplyGore(oCreature);
     }
 
@@ -1041,7 +1001,6 @@ void WthrStartLoop(object oCreature)
     int nGen = GetLocalInt(oCreature, WTHR_VAR_GEN) + 1;
     SetLocalInt(oCreature, WTHR_VAR_GEN, nGen);
     DeleteLocalObject(oCreature, WTHR_VAR_AREA);  // treat the first update as arriving
-    DeleteLocalInt(oCreature, WTHR_VAR_LAST_HP);
     DeleteLocalInt(oCreature, "WTHR_GORE_SENT");  // uniforms don't survive a login
     DelayCommand(1.0, WthrTick(oCreature, nGen));
 }

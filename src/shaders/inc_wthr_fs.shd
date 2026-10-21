@@ -207,6 +207,30 @@ float WeatherBloodCover(float fAmount, float fDrops, float fBlotch)
     return max(fDrop, fStain);
 }
 
+// Blood over metal armour: with per-pixel lighting a texture's shiny parts
+// show mostly reflection and hardly any colour, so blood painted into the
+// colour alone vanished on metal. Where blood covers, the surface stops
+// being metal: a soft wet sheen in the blood's own colour while fresh,
+// matte once dried.
+void WeatherBloodSurface(float fCover, vec3 vBlood)
+{
+    #if SPECULAR_LIGHT == 1
+        if (fCover <= 0.0) return;
+        #ifdef MATERIAL_METALLICNESS_GENERATE_VALUE
+            MATERIAL_METALLICNESS_VALUE = mix(MATERIAL_METALLICNESS_VALUE, 0.0, fCover);
+        #endif
+        #ifdef MATERIAL_SPECULARITY_GENERATE_VALUE
+            MATERIAL_SPECULARITY_VALUE = mix(MATERIAL_SPECULARITY_VALUE, mix(0.04, 0.02, BloodDry), fCover);
+        #endif
+        #ifdef MATERIAL_ROUGHNESS_GENERATE_VALUE
+            MATERIAL_ROUGHNESS_VALUE = mix(MATERIAL_ROUGHNESS_VALUE, mix(0.55, 0.9, BloodDry), fCover);
+        #endif
+        #ifdef MATERIAL_SPECULAR_COLOR_GENERATE_VALUE
+            MATERIAL_SPECULAR_COLOR_VALUE = mix(MATERIAL_SPECULAR_COLOR_VALUE, vBlood, fCover);
+        #endif
+    #endif
+}
+
 // One colour of others' blood: fAmount 0..1 of blood kind fKind, drawn
 // from the droplets at vOffset.
 void ApplySpatter(float fAmount, float fKind, vec2 vOffset, float fWeight)
@@ -216,6 +240,7 @@ void ApplySpatter(float fAmount, float fKind, vec2 vOffset, float fWeight)
     float fCover = WeatherBloodCover(clamp(fAmount, 0.0, 1.0) * fWeight, vSample.x, vSample.y);
     vec3 vBlood = ApplyColorSpace(WeatherDried(WeatherBloodColor(fKind), BloodDry));
     FragmentColor.rgb = mix(FragmentColor.rgb, vBlood, fCover * 0.9);
+    WeatherBloodSurface(fCover * 0.9, vBlood);
 }
 
 void ApplyBlood(vec3 vNoise)
@@ -230,6 +255,7 @@ void ApplyBlood(vec3 vNoise)
         float fCover = WeatherBloodCover(fAmount, vSample.x, vSample.y);
         vec3 vBlood = ApplyColorSpace(WeatherDried(WeatherBloodColor(BloodOwn), BloodDry));
         FragmentColor.rgb = mix(FragmentColor.rgb, vBlood, fCover * 0.9);
+        WeatherBloodSurface(fCover * 0.9, vBlood);
     }
     // Others' blood, one layer per colour: each uses its own part of the
     // droplet pattern (and its own stain blotches), so red and green drops
