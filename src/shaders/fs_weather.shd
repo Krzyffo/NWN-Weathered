@@ -11,14 +11,13 @@
 //   DustAmount  0..1  dust; climbs from the feet up as it grows
 //   DustSpread  0..1  0 = from the ground up, 1 = all over (dust storm)
 //   SnowAmount  0..1  snow settling on upward-facing surfaces, in clumps
-//                     with a little volume at their edges
 //   BloodWounds 0..1  the creature's own blood, from taking blows
-//   BloodSpatter 0..1 others' blood, from hitting them in melee: hands,
+//   SpatterRed, SpatterGreen, SpatterYellow, SpatterWhite  0..1 each:
+//                     others' blood, from hitting them in melee: hands,
 //                     arms and the front of the body
 //   BloodDry    0..1  fresh to dried (darker, browner)
 //   BloodOwn          own blood colour: 0 none, 1 red, 2 green, 3 yellow,
 //                     4 white
-//   SpatterR/G/B      the spatter's colour, mixed from whoever was hit
 //   PartLow, PartHigh (fixed per texture) where this body part sits on the
 //                     figure, 0 = feet, 1 = top of the head
 //   WoundWeight, SpatterWeight (fixed per texture) how much blood this

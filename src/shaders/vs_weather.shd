@@ -8,9 +8,11 @@
 //   vWeatherHeight  how high up its mesh the vertex sits (0..1, from the
 //                   mesh's local bounding box), for dust that builds up
 //                   from the ground; -1 when the engine gives no box
-//   vWeatherFacing  how much the surface faces up (x) and forward (y),
-//                   -1..1 each: snow settles on top, spatter on the
-//                   front (creatures face +y in their models)
+//   vWeatherNormal  which way the surface faces (z up, y forward:
+//                   creatures face +y in their models): snow settles on
+//                   top, spatter on the front
+//   vWeatherPos     where it is on the model, for blood drops placed in
+//                   3D instead of by the (often mirrored) texture layout
 //
 //=============================================================================
 

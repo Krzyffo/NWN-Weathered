@@ -7,8 +7,8 @@
 //   /snow 0.6         set snow (0..1)
 //   /storm 1          set how far the dust spreads (0 ground up .. 1 all over)
 //   /blood 0.5        set own blood, from wounds (0..1)
-//   /spatter 0.5 g    set others' blood (0..1), optionally its colour:
-//                     r, g, y or w (default red)
+//   /spatter 0.5 g    set others' blood of one colour (0..1): r, g, y or
+//                     w (default red); the other colours stay
 //   /dry 0.5          set how dried the blood is (0 fresh .. 1 dried)
 //   /clean            remove everything
 //
@@ -72,7 +72,10 @@ void WthrReport(object oPC, object oTarget)
                          + ", snow " + WthrNum(GetLocalFloat(oTarget, WTHR_VAR_SNOW))
                          + ", spread " + WthrNum(GetLocalFloat(oTarget, WTHR_VAR_SPREAD))
                          + "; blood " + WthrNum(GetLocalFloat(oTarget, WTHR_VAR_WOUNDS))
-                         + ", spatter " + WthrNum(GetLocalFloat(oTarget, WTHR_VAR_SPATTER))
+                         + ", spatter red " + WthrNum(GetLocalFloat(oTarget, WthrSpatterVar(1)))
+                         + " green " + WthrNum(GetLocalFloat(oTarget, WthrSpatterVar(2)))
+                         + " yellow " + WthrNum(GetLocalFloat(oTarget, WthrSpatterVar(3)))
+                         + " white " + WthrNum(GetLocalFloat(oTarget, WthrSpatterVar(4)))
                          + ", dried " + WthrNum(GetLocalFloat(oTarget, WTHR_VAR_DRY))
                          + "; bleeds " + IntToString(WthrBloodKind(oTarget)) + " (0 none, 1 red, 2 green, 3 yellow, 4 white).");
 }
@@ -130,6 +133,28 @@ string WthrReplaceYour(string s)
     return GetStringLeft(s, n) + "its own" + GetStringRight(s, GetStringLength(s) - n - 8);
 }
 
+// "red", "red and green", "red, green and yellow" for the colours of the
+// creature's spatter that show.
+string WthrSpatterColours(object oCreature)
+{
+    string sList = "";
+    int nCount = 0;
+    int n;
+    for (n = 1; n <= WTHR_BLOOD_KINDS; n++)
+        if (GetLocalFloat(oCreature, WthrSpatterVar(n)) >= 0.05) nCount++;
+    int nDone = 0;
+    for (n = 1; n <= WTHR_BLOOD_KINDS; n++)
+    {
+        if (GetLocalFloat(oCreature, WthrSpatterVar(n)) < 0.05) continue;
+        string sName = n == 1 ? "red" : (n == 2 ? "green" : (n == 3 ? "yellow" : "white"));
+        nDone++;
+        if (nDone == 1) sList = sName;
+        else if (nDone == nCount) sList += " and " + sName;
+        else sList += ", " + sName;
+    }
+    return sList;
+}
+
 string WthrBloodWords(float fWounds, float fSpatter, float fDry)
 {
     float fBlood = fWounds > fSpatter ? fWounds : fSpatter;
@@ -151,8 +176,10 @@ void WthrDirtLine(object oPC, object oCreature, string sWho)
     string sSnow = WthrSnowWords(fSnow) + (fSnow > 0.0 ? " (" + WthrPercent(fSnow) + ")" : "");
     if (fDust > 0.0 && GetLocalFloat(oCreature, WTHR_VAR_SPREAD) >= 0.5) sDust += ", all over";
     string sBlood = WthrBloodWords(GetLocalFloat(oCreature, WTHR_VAR_WOUNDS),
-                                   GetLocalFloat(oCreature, WTHR_VAR_SPATTER), GetLocalFloat(oCreature, WTHR_VAR_DRY));
+                                   WthrSpatter(oCreature), GetLocalFloat(oCreature, WTHR_VAR_DRY));
     if (oCreature != oPC) sBlood = WthrReplaceYour(sBlood);
+    string sColours = WthrSpatterColours(oCreature);
+    if (sColours != "") sBlood += ", spattered " + sColours;
     SendMessageToPC(oPC, sWho + ": " + sDust + ", " + sSnow + ", " + sBlood + ".");
 }
 
@@ -204,7 +231,7 @@ void WthrRunCommand(object oPC, object oTarget, string sMsg)
     {
         SetLocalInt(oTarget, WTHR_VAR_FADE, GetLocalInt(oTarget, WTHR_VAR_FADE) + 1);  // stop a running fade
         SetLocalFloat(oTarget, WTHR_VAR_WOUNDS, 0.0);
-        SetLocalFloat(oTarget, WTHR_VAR_SPATTER, 0.0);
+        WthrSetSpatterTotal(oTarget, 0.0);
         SetLocalFloat(oTarget, WTHR_VAR_DRY, 0.0);
         WthrSet(oTarget, 0.0, 0.0, 0.0);
         WthrReport(oPC, oTarget);
@@ -224,10 +251,7 @@ void WthrRunCommand(object oPC, object oTarget, string sMsg)
     {
         int nKind = WthrBloodKindFromLetter(WthrArg(sMsg, 2));
         if (nKind == 0) nKind = 1;  // red
-        SetLocalFloat(oTarget, WTHR_VAR_SPATTER, fValue);
-        SetLocalFloat(oTarget, WTHR_VAR_SPAT_R, WthrBloodChannel(nKind, 0));
-        SetLocalFloat(oTarget, WTHR_VAR_SPAT_G, WthrBloodChannel(nKind, 1));
-        SetLocalFloat(oTarget, WTHR_VAR_SPAT_B, WthrBloodChannel(nKind, 2));
+        SetLocalFloat(oTarget, WthrSpatterVar(nKind), fValue);  // that colour only; the others stay
     }
     else if (WthrIsCommand(sMsg, "/dry"))
         SetLocalFloat(oTarget, WTHR_VAR_DRY, fValue);

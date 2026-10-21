@@ -3,7 +3,7 @@
 Dust, snow and blood on characters, monsters, placeables and doors in Neverwinter Nights: Enhanced Edition, one at a time.
 
 - **Dust** builds up from the ground: boots first, then the legs, past the waist when heavy. In a dust storm it settles over the whole body.
-- **Snow** settles in matte clumps where surfaces face up (shoulders, hoods, the tops of boots), with a slightly raised edge.
+- **Snow** settles in matte clumps where surfaces face up (shoulders, hoods, the tops of boots).
 - **Blood** from fighting: blows leave a creature's own blood on it, and melee attackers get their victims' blood on their hands, arms and front, in each victim's colour. Blood dries darker over a few minutes.
 - **Gradual:** dust and snow come and go step by step, blood builds up hit by hit, and a noise texture breaks everything into natural patches.
 - **Per creature, in multiplayer:** the look belongs to the creature, so every player sees the same dusty traveller.
@@ -90,21 +90,22 @@ In an area with `WTHR_DUST_STORM = 1`, creatures start with dust over their whol
 
 Blood needs no setup: it comes from fights anywhere, on players, companions, NPCs and monsters alike.
 
-- **Wounds:** physical damage (slashing, piercing, bludgeoning) leaves the creature's own blood on it, more as it loses more of its maximum hit points. Fire, cold, acid and other damage leave none.
+- **Wounds:** physical damage (slashing, piercing, bludgeoning) leaves the creature's own blood on it. Taking three times its maximum hit points in damage takes it from clean to fully bloodied; healing doesn't remove blood, so it builds up over an adventure until it's washed off. Fire, cold, acid and other damage leave none.
 - **Spatter:** a melee attacker (within 3.5 m, not using a ranged weapon) gets the victim's blood on its hands and forearms first, then on its chest and face, mostly on the front. Archers and casters stay clean.
-- **Colour:** each creature bleeds in the colour from `appearance.2da`: red, green, yellow, white, or none (skeletons, golems, elementals, which leave nothing on their attackers either). Override it with a string `WTHR_BLOOD_COLOR` on a creature: `R`, `G`, `Y`, `W` or `N`. Spatter from different victims mixes.
+- **Colour:** each creature bleeds in the colour from `appearance.2da`: red, green, yellow, white, or none (skeletons, golems, elementals, which leave nothing on their attackers either). Override it with a string `WTHR_BLOOD_COLOR` on a creature: `R`, `G`, `Y`, `W` or `N`. Each colour of spatter is a layer of its own, using different drops: after fighting orcs and a troll, red and green drops sit side by side instead of mixing.
+- **Placement:** blood is placed on the model in 3D, not by its texture. Most creature textures are mirrored (one half serves both sides of a chest, one texture both shins), so placing by texture made every stain appear twice, symmetrically. Drops are a mix of round ones and stretched splashes with trailing tails.
 - **Drying:** fresh blood darkens to a dried brown. New blood on top looks fresher.
 - **Gore setting:** a player whose game has gore turned off (Options > Game) sees no blood on anyone. Others still see it.
 - **Cleaning:** rain washes it off slowly; resting, washing and the clothes brush remove it.
 
-Players have no "damaged" event in NWN, so their loop checks their hit points every 2 seconds. A drop counts as physical damage when whoever damaged them last also attacked them last (a weapon hit, not a spell). It can occasionally count a spell from an enemy that is also fighting them.
+Classic NWN gave player characters no "damaged" event. On login the scripts try to put `wthr_damaged` on the player's own OnDamaged anyway; once it fires, blood on players comes from it, the same way as for monsters. With `WTHR_DEBUG = 1` you get a message saying whether the game accepted it, and another when it first fires. Until it does, or if the game refuses it, the player's loop looks every 2 seconds at who is fighting them and at their hit points. A drop while a creature in melee range is attacking them counts as a melee hit: that creature gets the spatter, and the player the wounds. A drop while only archers attack counts as wounds alone, and a drop with nobody attacking (a spell, a trap) leaves no blood. A spell cast by an enemy that is also attacking them can be counted as a hit. Creatures fighting a player are set up for blood at once, so even a monster that spawns and charges bleeds from the first blow.
 
 **On the module:**
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `WTHR_BLOOD_DRY_MINUTES` | 5 | Real minutes for blood to dry completely; -1 = it never dries |
-| `WTHR_BLOOD_WOUNDS` | 1 | How much blood wounds leave (a multiplier) |
+| `WTHR_BLOOD_FULL_HP` | 3 | Damage, in multiples of the creature's max HP, that takes its own blood from none to full. Healing doesn't remove blood, so it builds up over an adventure |
 | `WTHR_BLOOD_SPATTER` | 1 | How much spatter melee hits leave (a multiplier) |
 | `WTHR_RAIN_BLOOD` | 0.1 | Blood washed off per minute in the rain; also on an area; -1 = none |
 | `WTHR_BLOOD_OFF` | | Int, 1 = no blood at all |
@@ -135,13 +136,13 @@ Area tiles (the walls, floors and buildings that come from the tileset) can't ta
 Anyone, player or DM, can type `/dirt` to see their own dust, snow and blood, and their companions':
 
 ```
-You: dusty (34%), a dusting of snow (10%), bloodstained (mostly others').
+You: dusty (34%), a dusting of snow (10%), bloodstained (mostly others'), spattered red and green.
 Tomi Undergallows: very dusty (61%), all over, no snow, a few spots of blood (mostly its own, dried).
 ```
 
 - **Dust:** "a little dusty", then "dusty" and "very dusty", up to "caked in dust". "All over" means storm dust rather than dust from the ground up.
 - **Snow:** "a dusting of snow", then "snowy" and "covered in snow", up to "buried in snow".
-- **Blood:** "a few spots of blood", then "bloodstained" and "covered in blood", up to "drenched in blood". It also says whose blood it mostly is and whether it has dried.
+- **Blood:** "a few spots of blood", then "bloodstained" and "covered in blood", up to "drenched in blood". It also says whose blood it mostly is, whether it has dried, and which colours of spatter are on you.
 
 ## Cleaning up
 
@@ -165,14 +166,14 @@ Test commands work for DMs, or for everyone when the module has the int variable
 | `/dust 0.6`, `/snow 0.6` | Set dust or snow (0-1) |
 | `/storm 1` | How far the dust spreads (0 = ground up, 1 = all over) |
 | `/blood 0.5` | Set own blood, as from wounds (0-1) |
-| `/spatter 0.5 g` | Set others' blood (0-1), optionally its colour: `r`, `g`, `y` or `w` (default red) |
+| `/spatter 0.5 g` | Set others' blood of one colour (0-1): `r`, `g`, `y` or `w` (default red). The other colours stay, so `/spatter 0.5` then `/spatter 0.5 g` gives both |
 | `/dry 0.5` | Set how dried the blood is (0 = fresh, 1 = dried) |
 | `/clean` | Remove everything |
 
 What to check:
 
 - **Dust climbs:** `/dust 0.2`, then 0.5, then 1. The dust should start at the boots and climb, and `/storm 1` should cover everything. On monsters this depends on the game giving the shader each mesh's size. If dust on a monster appears all at once instead of climbing, tell me.
-- **Snow:** `/snow 1` should show white clumps on shoulders, head and boot tops, not on faces or the sides of arms and legs. The raised edges show only with per-pixel lighting, the default on most machines.
+- **Snow:** `/snow 1` should show white clumps on shoulders, head and boot tops, not on faces or the sides of arms and legs.
 - **Building up:** set `WTHR_DUST_RATE` 0.2 on an area and walk around. `/wthr` shows the levels rising, and leaving the area makes them fade.
 - **Brush, washing and resting:** each should clean as described above.
 - **Blood from fighting:** fight something in melee. Its blood should appear on you (hands and forearms first) and yours on it where you're hit. Try a green-blooded creature too (trolls, for example), and a skeleton, which should leave nothing.
@@ -189,7 +190,7 @@ NWN:EE gives a texture a material when a `.mtr` file of the same name exists. Th
 - **The noise texture** in the shader's unused height-map slot.
 - **A height range for its body part** (feet low, head high), which the build bakes in so dust can climb.
 - **How much blood its body part catches:** wounds anywhere, spatter on hands and arms first.
-- **Values a script sets on one creature**, via `SetMaterialShaderUniformVec4`: `DustAmount`, `DustSpread`, `SnowAmount`, `BloodWounds`, `BloodSpatter`, `BloodDry`, `BloodOwn` (its blood colour) and `SpatterR`/`G`/`B` (the spatter's colour). Only the values that changed are sent, and blood from a fight is bundled into one send per second.
+- **Values a script sets on one creature**, via `SetMaterialShaderUniformVec4`: `DustAmount`, `DustSpread`, `SnowAmount`, `BloodWounds`, `BloodDry`, `BloodOwn` (its blood colour) and `SpatterRed`, `SpatterGreen`, `SpatterYellow`, `SpatterWhite` (others' blood, one layer per colour). Only the values that changed are sent, and blood from a fight is bundled into one send per second.
 
 Gore is a per-player switch: the scripts set a global shader value (`scriptableInt16`) for each player from their gore setting, and the shader skips blood for that player.
 
@@ -222,7 +223,7 @@ It reads the game's models (about half a minute) and writes `nwn_weathered.hak` 
 
 ## Repository
 
-- `src/shaders/`: `inc_wthr_vs` (height and facing on the body) and `inc_wthr_fs` (dust, snow, blood, noise), shared by two variants: `vs_weather`/`fs_weather` with the environment map (creatures, whose texture alpha is shininess) and `vs_wthr_plain`/`fs_wthr_plain` without (placeables and doors, whose alpha is transparency unless their `.txi` asks for an environment map).
+- `src/shaders/`: `inc_wthr_vs` (height, facing and standing-pose position on the body) and `inc_wthr_fs` (dust, snow, blood, noise), shared by two variants: `vs_weather`/`fs_weather` with the environment map (creatures, whose texture alpha is shininess) and `vs_wthr_plain`/`fs_wthr_plain` without (placeables and doors, whose alpha is transparency unless their `.txi` asks for an environment map).
 - `src/nss/`: `wthr_inc` (all the logic), the event scripts `wthr_modload`, `wthr_enter`, `wthr_chat`, `wthr_activate`, `wthr_equip` and `wthr_rest`, plus `wthr_damaged` (blood on NPCs and monsters), `wthr_target` (DM cursor), `wthr_cmd_inc` (commands), `wthr_zone` (triggers) and `wthr_wash` (washing).
 - `tools/build.py`: reads the game's models; generates the materials, tables, noise texture and brush; compiles; packs.
 - `tools/nwn_key.py`, `tools/nwn_paths.py`: read the game's archives and find the game.

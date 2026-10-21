@@ -9,7 +9,8 @@
 #include "inc_uniforms"
 
 varying float vWeatherHeight;
-varying vec2 vWeatherFacing;
+varying vec3 vWeatherNormal;  // standing pose, model space: z up, y forward
+varying vec3 vWeatherPos;     // standing pose, model space, in metres
 
 void main ()
 {
@@ -17,5 +18,6 @@ void main ()
 
     float fSpan = bboxMax.z - bboxMin.z;
     vWeatherHeight = fSpan > 0.01 ? clamp((vPos.z - bboxMin.z) / fSpan, 0.0, 1.0) : -1.0;
-    vWeatherFacing = dot(vNormal, vNormal) > 0.0 ? normalize(vNormal).zy : vec2(0.0);
+    vWeatherNormal = dot(vNormal, vNormal) > 0.0 ? normalize(vNormal) : vec3(0.0);
+    vWeatherPos = vPos.xyz;
 }

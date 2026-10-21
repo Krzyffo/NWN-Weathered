@@ -53,7 +53,10 @@
 //   WTHR_FADE_SNOW           the same for snow, outdoors (0.05)
 //   WTHR_FADE_SNOW_INDOORS   in interiors and underground (0.4)
 //   WTHR_BLOOD_DRY_MINUTES   real minutes for blood to dry (5; -1 = never)
-//   WTHR_BLOOD_WOUNDS        how much blood wounds leave (multiplier, 1)
+//   WTHR_BLOOD_FULL_HP       how much damage, in multiples of a creature's
+//                            max HP, takes its own blood from 0 to 1 (3).
+//                            Healing doesn't remove blood, so it builds up
+//                            over an adventure.
 //   WTHR_BLOOD_SPATTER       how much spatter hits leave (multiplier, 1)
 //   WTHR_BLOOD_OFF      int, 1 = no blood at all
 //   WTHR_DEBUG          int, 1 = test commands for everyone, not just DMs
@@ -65,11 +68,8 @@ const string WTHR_VAR_DUST      = "WTHR_DUST";       // float: dust level
 const string WTHR_VAR_SNOW      = "WTHR_SNOW";       // float: snow level
 const string WTHR_VAR_SPREAD    = "WTHR_SPREAD";     // float: 0 ground up .. 1 all over
 const string WTHR_VAR_WOUNDS    = "WTHR_WOUNDS";     // float: own blood
-const string WTHR_VAR_SPATTER   = "WTHR_SPATTER";    // float: others' blood
+const string WTHR_VAR_SPAT      = "WTHR_SPAT_";      // + blood kind 1-4: others' blood of that colour
 const string WTHR_VAR_DRY       = "WTHR_DRY";        // float: 0 fresh .. 1 dried
-const string WTHR_VAR_SPAT_R    = "WTHR_SPAT_R";     // floats: the spatter's colour
-const string WTHR_VAR_SPAT_G    = "WTHR_SPAT_G";
-const string WTHR_VAR_SPAT_B    = "WTHR_SPAT_B";
 const string WTHR_VAR_SENT      = "WTHR_SENT_";      // + param name: value last sent
 const string WTHR_VAR_MATERIALS = "WTHR_MATERIALS";  // string: materials last sent to
 const string WTHR_VAR_SEEN      = "WTHR_SEEN";       // int: got its starting look
@@ -98,7 +98,6 @@ const string WTHR_PARAM_DUST    = "DustAmount";
 const string WTHR_PARAM_SPREAD  = "DustSpread";
 const string WTHR_PARAM_SNOW    = "SnowAmount";
 const string WTHR_PARAM_WOUNDS  = "BloodWounds";
-const string WTHR_PARAM_SPATTER = "BloodSpatter";
 const string WTHR_PARAM_DRY     = "BloodDry";
 const string WTHR_PARAM_OWN     = "BloodOwn";
 
@@ -269,25 +268,55 @@ int WthrBloodKind(object oCreature)
     return WthrBloodKindFromLetter(Get2DAString("appearance", "BLOODCOLR", GetAppearanceType(oCreature)));
 }
 
-// Gamma-space colour of a blood kind, one channel (0 r, 1 g, 2 b); the
-// same colours as WeatherBloodColor in fs_weather.
-float WthrBloodChannel(int nKind, int nChannel)
-{
-    switch (nKind)
-    {
-        case 1: return nChannel == 0 ? 0.42 : 0.02;
-        case 2: return nChannel == 0 ? 0.18 : (nChannel == 1 ? 0.40 : 0.06);
-        case 3: return nChannel == 0 ? 0.65 : (nChannel == 1 ? 0.55 : 0.08);
-        case 4: return nChannel == 2 ? 0.76 : 0.82;
-    }
-    return 0.0;
-}
-
 // ---- Levels ----------------------------------------------------------------
 
 float WthrClamp(float f)
 {
     return f < 0.0 ? 0.0 : (f > 1.0 ? 1.0 : f);
+}
+
+// ---- Spatter, one level per blood colour ------------------------------------
+
+const int WTHR_BLOOD_KINDS = 4;  // 1 red, 2 green, 3 yellow, 4 white
+
+string WthrSpatterVar(int nKind)
+{
+    return WTHR_VAR_SPAT + IntToString(nKind);
+}
+
+string WthrSpatterParam(int nKind)
+{
+    switch (nKind)
+    {
+        case 1: return "SpatterRed";
+        case 2: return "SpatterGreen";
+        case 3: return "SpatterYellow";
+    }
+    return "SpatterWhite";
+}
+
+// All of the creature's spatter together, 0..1.
+float WthrSpatter(object oCreature)
+{
+    float f = 0.0;
+    int n;
+    for (n = 1; n <= WTHR_BLOOD_KINDS; n++) f += GetLocalFloat(oCreature, WthrSpatterVar(n));
+    return WthrClamp(f);
+}
+
+// Scales every colour of spatter so they add up to fTotal: cleaning, rain
+// and fades take each colour off in step.
+void WthrSetSpatterTotal(object oCreature, float fTotal)
+{
+    fTotal = WthrClamp(fTotal);
+    float fNow = WthrSpatter(oCreature);
+    float fScale = fNow > 0.0 ? fTotal / fNow : 0.0;
+    int n;
+    for (n = 1; n <= WTHR_BLOOD_KINDS; n++)
+    {
+        string sVar = WthrSpatterVar(n);
+        SetLocalFloat(oCreature, sVar, GetLocalFloat(oCreature, sVar) * fScale);
+    }
 }
 
 int WthrChanged(float fNow, float fSent)
@@ -325,12 +354,9 @@ void WthrSend(object oCreature, int bNewLook = FALSE, int bForce = FALSE)
     WthrPush(oCreature, sList, WTHR_PARAM_DRY, WTHR_VAR_DRY, bForce);
     if (WthrPush(oCreature, sList, WTHR_PARAM_WOUNDS, WTHR_VAR_WOUNDS, bForce))
         WthrSetParam(oCreature, sList, WTHR_PARAM_OWN, IntToFloat(WthrBloodKind(oCreature)));
-    if (WthrPush(oCreature, sList, WTHR_PARAM_SPATTER, WTHR_VAR_SPATTER, bForce))
-    {
-        WthrSetParam(oCreature, sList, "SpatterR", GetLocalFloat(oCreature, WTHR_VAR_SPAT_R));
-        WthrSetParam(oCreature, sList, "SpatterG", GetLocalFloat(oCreature, WTHR_VAR_SPAT_G));
-        WthrSetParam(oCreature, sList, "SpatterB", GetLocalFloat(oCreature, WTHR_VAR_SPAT_B));
-    }
+    int nKind;
+    for (nKind = 1; nKind <= WTHR_BLOOD_KINDS; nKind++)
+        WthrPush(oCreature, sList, WthrSpatterParam(nKind), WthrSpatterVar(nKind), bForce);
 }
 
 void WthrFlush(object oCreature)
@@ -359,14 +385,14 @@ void WthrSetLevels(object oCreature, float fDust, float fSnow, float fSpread, in
     WthrSend(oCreature, FALSE, bForce);
 }
 
-// Sets wounds and spatter (0..1 each); no blood left means fresh again.
+// Sets wounds and all spatter together (0..1 each; the colours keep their
+// shares); no blood left means fresh again.
 void WthrSetBlood(object oCreature, float fWounds, float fSpatter, int bForce = FALSE)
 {
     fWounds = WthrClamp(fWounds);
-    fSpatter = WthrClamp(fSpatter);
     SetLocalFloat(oCreature, WTHR_VAR_WOUNDS, fWounds);
-    SetLocalFloat(oCreature, WTHR_VAR_SPATTER, fSpatter);
-    if (fWounds <= 0.0 && fSpatter <= 0.0) SetLocalFloat(oCreature, WTHR_VAR_DRY, 0.0);
+    WthrSetSpatterTotal(oCreature, fSpatter);
+    if (fWounds <= 0.0 && WthrSpatter(oCreature) <= 0.0) SetLocalFloat(oCreature, WTHR_VAR_DRY, 0.0);
     WthrSend(oCreature, FALSE, bForce);
 }
 
@@ -389,7 +415,7 @@ void WthrRefresh(object oCreature)
 
 int WthrHasBlood(object oCreature)
 {
-    return GetLocalFloat(oCreature, WTHR_VAR_WOUNDS) > 0.0 || GetLocalFloat(oCreature, WTHR_VAR_SPATTER) > 0.0;
+    return GetLocalFloat(oCreature, WTHR_VAR_WOUNDS) > 0.0 || WthrSpatter(oCreature) > 0.0;
 }
 
 int WthrHasAny(object oCreature)
@@ -430,7 +456,7 @@ void WthrFadeTo(object oCreature, float fDust, float fSnow, float fSpread, float
     WthrFadeStep(oCreature, nFade, 1, nSteps,
                  GetLocalFloat(oCreature, WTHR_VAR_DUST), GetLocalFloat(oCreature, WTHR_VAR_SNOW),
                  GetLocalFloat(oCreature, WTHR_VAR_SPREAD), GetLocalFloat(oCreature, WTHR_VAR_WOUNDS),
-                 GetLocalFloat(oCreature, WTHR_VAR_SPATTER),
+                 WthrSpatter(oCreature),
                  WthrClamp(fDust), WthrClamp(fSnow), WthrClamp(fSpread), WthrClamp(fWounds), WthrClamp(fSpatter));
 }
 
@@ -444,7 +470,7 @@ void WthrClean(object oCreature, float fDustShare, float fSnowShare, float fBloo
                GetLocalFloat(oCreature, WTHR_VAR_SNOW) * (1.0 - WthrClamp(fSnowShare)),
                fDust > 0.0 ? GetLocalFloat(oCreature, WTHR_VAR_SPREAD) : 0.0,
                GetLocalFloat(oCreature, WTHR_VAR_WOUNDS) * fBloodKeep,
-               GetLocalFloat(oCreature, WTHR_VAR_SPATTER) * fBloodKeep, fSeconds);
+               WthrSpatter(oCreature) * fBloodKeep, fSeconds);
 }
 
 // ---- Where things build up -------------------------------------------------
@@ -567,16 +593,16 @@ void WthrWeather(object oCreature, object oArea, int bMoving, float fMinutes)
     if (WthrIsRaining(oArea))
         fWash = WthrValue(oArea, "WTHR_RAIN_BLOOD", WthrModuleRate("WTHR_RAIN_BLOOD", WTHR_DEFAULT_RAIN_BLOOD)) * fMinutes;
     WthrSetBlood(oCreature, GetLocalFloat(oCreature, WTHR_VAR_WOUNDS) - fWash,
-                 GetLocalFloat(oCreature, WTHR_VAR_SPATTER) - fWash);
+                 WthrSpatter(oCreature) - fWash);
 }
 
 // ---- Blood -------------------------------------------------------------------
 
 const float WTHR_MELEE_RANGE   = 3.5;   // metres: closer than this is melee
-const float WTHR_WOUND_SCALE   = 1.5;   // wounds per share of max HP lost
-const float WTHR_SPATTER_BASE  = 0.05;  // spatter per melee hit ...
-const float WTHR_SPATTER_SCALE = 0.5;   // ... plus this per share of the victim's max HP
-const float WTHR_SPATTER_MAX   = 0.25;  // most spatter one hit can leave
+const float WTHR_DEFAULT_FULL_HP = 3.0;  // max HP worth of damage for full wounds
+const float WTHR_SPATTER_BASE  = 0.08;  // spatter per melee hit ...
+const float WTHR_SPATTER_SCALE = 1.0;   // ... plus this per share of the victim's max HP
+const float WTHR_SPATTER_MAX   = 0.3;   // most spatter one hit can leave
 const float WTHR_DRY_TICK      = 20.0;  // seconds between drying steps of creatures without a loop
 
 // Drying for creatures without a loop of their own (monsters, NPCs): a
@@ -596,25 +622,21 @@ void WthrDryLoop(object oCreature)
 int WthrIsPartyMember(object oCreature);
 
 // Adds blood: fWounds of the creature's own, fSpatter of kind nKind (from
-// whoever it hit). Fresh blood makes the whole a little fresher, and the
-// spatter colour mixes with what is already there.
+// whoever it hit, into that colour's own layer). Fresh blood makes the
+// whole a little fresher.
 void WthrAddBlood(object oCreature, float fWounds, float fSpatter, int nKind)
 {
-    float fOld = GetLocalFloat(oCreature, WTHR_VAR_WOUNDS) + GetLocalFloat(oCreature, WTHR_VAR_SPATTER);
+    float fOld = GetLocalFloat(oCreature, WTHR_VAR_WOUNDS) + WthrSpatter(oCreature);
     float fNew = fWounds + fSpatter;
     if (fNew <= 0.0) return;
     SetLocalFloat(oCreature, WTHR_VAR_DRY, GetLocalFloat(oCreature, WTHR_VAR_DRY) * fOld / (fOld + fNew));
 
-    if (fSpatter > 0.0)
-    {
-        float fHad = GetLocalFloat(oCreature, WTHR_VAR_SPATTER);
-        float fShare = fSpatter / (fHad + fSpatter);
-        SetLocalFloat(oCreature, WTHR_VAR_SPAT_R, GetLocalFloat(oCreature, WTHR_VAR_SPAT_R) * (1.0 - fShare) + WthrBloodChannel(nKind, 0) * fShare);
-        SetLocalFloat(oCreature, WTHR_VAR_SPAT_G, GetLocalFloat(oCreature, WTHR_VAR_SPAT_G) * (1.0 - fShare) + WthrBloodChannel(nKind, 1) * fShare);
-        SetLocalFloat(oCreature, WTHR_VAR_SPAT_B, GetLocalFloat(oCreature, WTHR_VAR_SPAT_B) * (1.0 - fShare) + WthrBloodChannel(nKind, 2) * fShare);
-    }
     SetLocalFloat(oCreature, WTHR_VAR_WOUNDS, WthrClamp(GetLocalFloat(oCreature, WTHR_VAR_WOUNDS) + fWounds));
-    SetLocalFloat(oCreature, WTHR_VAR_SPATTER, WthrClamp(GetLocalFloat(oCreature, WTHR_VAR_SPATTER) + fSpatter));
+    if (fSpatter > 0.0 && nKind >= 1 && nKind <= WTHR_BLOOD_KINDS)
+    {
+        string sVar = WthrSpatterVar(nKind);
+        SetLocalFloat(oCreature, sVar, WthrClamp(GetLocalFloat(oCreature, sVar) + fSpatter));
+    }
     WthrQueueSend(oCreature);
 
     // Creatures with a loop dry in it; the rest get a drying loop.
@@ -623,6 +645,20 @@ void WthrAddBlood(object oCreature, float fWounds, float fSpatter, int nKind)
     {
         SetLocalInt(oCreature, WTHR_VAR_DRYING, TRUE);
         DelayCommand(WTHR_DRY_TICK, WthrDryLoop(oCreature));
+    }
+}
+
+// With WTHR_DEBUG = 1 on the module: a line to every player in oNear's
+// area, for following blood decisions while testing.
+void WthrDebugBlood(object oNear, string sMsg)
+{
+    if (!GetLocalInt(GetModule(), WTHR_DEBUG)) return;
+    object oArea = GetArea(oNear);
+    object oPC = GetFirstPC();
+    while (GetIsObjectValid(oPC))
+    {
+        if (GetArea(oPC) == oArea) SendMessageToPC(oPC, "NWN-Weathered blood: " + sMsg);
+        oPC = GetNextPC();
     }
 }
 
@@ -646,18 +682,36 @@ void WthrPhysicalDamage(object oVictim, object oAttacker, int nDamage)
 
     int nMax = GetMaxHitPoints(oVictim);
     float fShare = IntToFloat(nDamage) / IntToFloat(nMax > 0 ? nMax : 1);
-    WthrAddBlood(oVictim, WTHR_WOUND_SCALE * fShare * WthrModuleRate("WTHR_BLOOD_WOUNDS", 1.0), 0.0, nKind);
+    float fWounds = fShare / WthrModuleRate("WTHR_BLOOD_FULL_HP", WTHR_DEFAULT_FULL_HP);
+    WthrAddBlood(oVictim, fWounds, 0.0, nKind);
+    string sLine = GetName(oVictim) + " took " + IntToString(nDamage) + " from "
+                 + (GetIsObjectValid(oAttacker) ? GetName(oAttacker) : "(no attacker)")
+                 + ": wounds +" + FloatToString(fWounds, 0, 3)
+                 + " (now " + FloatToString(GetLocalFloat(oVictim, WTHR_VAR_WOUNDS), 0, 2) + ")";
 
-    if (GetObjectType(oAttacker) != OBJECT_TYPE_CREATURE || oAttacker == oVictim
-        || GetLocalInt(oAttacker, WTHR_SKIP) || !WthrIsMelee(oAttacker, oVictim))
+    string sNo = "";
+    if (GetObjectType(oAttacker) != OBJECT_TYPE_CREATURE) sNo = "the attacker isn't a creature";
+    else if (oAttacker == oVictim) sNo = "it hurt itself";
+    else if (GetLocalInt(oAttacker, WTHR_SKIP)) sNo = "the attacker has WTHR_SKIP";
+    else if (GetArea(oAttacker) != GetArea(oVictim)) sNo = "the attacker is in another area";
+    else if (GetDistanceBetween(oAttacker, oVictim) > WTHR_MELEE_RANGE)
+        sNo = "too far for melee (" + FloatToString(GetDistanceBetween(oAttacker, oVictim), 0, 1) + " m)";
+    else if (!WthrIsMelee(oAttacker, oVictim)) sNo = "the attacker holds a ranged weapon";
+    if (sNo != "")
+    {
+        WthrDebugBlood(oVictim, sLine + "; no spatter: " + sNo + ".");
         return;
+    }
     float fSpatter = WTHR_SPATTER_BASE + WTHR_SPATTER_SCALE * fShare;
     if (fSpatter > WTHR_SPATTER_MAX) fSpatter = WTHR_SPATTER_MAX;
-    WthrAddBlood(oAttacker, 0.0, fSpatter * WthrModuleRate("WTHR_BLOOD_SPATTER", 1.0), nKind);
+    fSpatter *= WthrModuleRate("WTHR_BLOOD_SPATTER", 1.0);
+    WthrAddBlood(oAttacker, 0.0, fSpatter, nKind);
+    WthrDebugBlood(oVictim, sLine + "; spatter +" + FloatToString(fSpatter, 0, 3) + " on " + GetName(oAttacker)
+                            + " (now " + FloatToString(WthrSpatter(oAttacker), 0, 2) + ").");
 }
 
 // Puts wthr_damaged on a creature's OnDamaged, keeping its own script.
-// Players have no OnDamaged; their loop watches their hit points instead.
+// Players: see WthrHookPlayer.
 void WthrHookDamage(object oCreature)
 {
     if (GetObjectType(oCreature) != OBJECT_TYPE_CREATURE || GetIsPC(oCreature)
@@ -666,7 +720,38 @@ void WthrHookDamage(object oCreature)
     string sOwn = GetEventScript(oCreature, EVENT_SCRIPT_CREATURE_ON_DAMAGED);
     if (sOwn == "wthr_damaged") return;
     SetLocalString(oCreature, WTHR_VAR_ORIG_DMG, sOwn);
-    SetEventScript(oCreature, EVENT_SCRIPT_CREATURE_ON_DAMAGED, "wthr_damaged");
+    int bOk = SetEventScript(oCreature, EVENT_SCRIPT_CREATURE_ON_DAMAGED, "wthr_damaged");
+    if (GetLocalInt(GetModule(), WTHR_DEBUG))
+    {
+        object oPC = GetFirstPC();
+        while (GetIsObjectValid(oPC))
+        {
+            if (GetArea(oPC) == GetArea(oCreature))
+                SendMessageToPC(oPC, "NWN-Weathered blood: watching " + GetName(oCreature) + " (its OnDamaged was '"
+                                     + sOwn + "')" + (bOk ? "." : " - FAILED to set."));
+            oPC = GetNextPC();
+        }
+    }
+}
+
+// On a player: their OnDamaged is ours (TRUE once the game accepted it),
+// and it has fired at least once, so the hit point check can stop.
+const string WTHR_VAR_PC_HOOKED = "WTHR_PC_HOOKED";
+const string WTHR_VAR_PC_EVENTS = "WTHR_PC_EVENTS";
+
+// Tries to put wthr_damaged on a player's own OnDamaged, keeping any script
+// already there. Classic NWN gave players no creature events; whether this
+// works depends on the game. Until the event has fired once, the player's
+// loop keeps checking hit points as well (WthrWatchHitPoints), so blood
+// works either way. Returns TRUE if the game accepted the script.
+int WthrHookPlayer(object oPC)
+{
+    DeleteLocalInt(oPC, WTHR_VAR_PC_EVENTS);  // prove it again after each login
+    string sOwn = GetEventScript(oPC, EVENT_SCRIPT_CREATURE_ON_DAMAGED);
+    if (sOwn != "wthr_damaged") SetLocalString(oPC, WTHR_VAR_ORIG_DMG, sOwn);
+    int bOk = sOwn == "wthr_damaged" || SetEventScript(oPC, EVENT_SCRIPT_CREATURE_ON_DAMAGED, "wthr_damaged");
+    SetLocalInt(oPC, WTHR_VAR_PC_HOOKED, bOk);
+    return bOk;
 }
 
 // The player's game decides whether they see blood: gore off hides it on
@@ -848,18 +933,64 @@ void WthrWeatherAssociates(object oPC, object oArea, int bMoving, float fMinutes
     }
 }
 
-// Players have no OnDamaged event: a drop in hit points since the last
-// update counts as physical damage when the last damager is also the last
-// attacker (a weapon, not a spell).
+const float WTHR_FIGHT_RANGE = 20.0;  // metres: creatures this close may be fighting the player
+
+// Gets a creature ready for blood the moment it fights a player, instead
+// of waiting for the next sweep.
+void WthrReadyForBlood(object oCreature)
+{
+    if (GetObjectType(oCreature) != OBJECT_TYPE_CREATURE || GetIsPC(oCreature)) return;
+    if (!GetLocalInt(oCreature, WTHR_VAR_SEEN) && !WthrIsPartyMember(oCreature))
+        WthrStartLook(oCreature, GetArea(oCreature));
+    else
+        WthrHookDamage(oCreature);
+}
+
+// Each update looks at who is fighting a player: whoever they attack, and
+// every creature nearby attacking them, gets its blood watched right away.
+// Until the player's own OnDamaged has fired (WthrHookPlayer), a drop in
+// hit points since the last update
+// is a weapon hit when someone is attacking them: the nearest attacker in
+// melee range gets the spatter; if only archers are attacking, it's wounds
+// alone. With no attacker at all (a spell, a trap) it leaves no blood.
 void WthrWatchHitPoints(object oPC)
 {
+    WthrReadyForBlood(GetAttackTarget(oPC));
+
+    object oMelee = OBJECT_INVALID;
+    float fMelee = WTHR_FIGHT_RANGE;
+    int bRanged = FALSE;
+    location lHere = GetLocation(oPC);
+    object o = GetFirstObjectInShape(SHAPE_SPHERE, WTHR_FIGHT_RANGE, lHere, FALSE, OBJECT_TYPE_CREATURE);
+    while (GetIsObjectValid(o))
+    {
+        if (o != oPC && !GetIsDead(o) && GetAttackTarget(o) == oPC)
+        {
+            WthrReadyForBlood(o);
+            if (WthrIsMelee(o, oPC))
+            {
+                float fDistance = GetDistanceBetween(o, oPC);
+                if (fDistance < fMelee)
+                {
+                    oMelee = o;
+                    fMelee = fDistance;
+                }
+            }
+            else
+                bRanged = TRUE;
+        }
+        o = GetNextObjectInShape(SHAPE_SPHERE, WTHR_FIGHT_RANGE, lHere, FALSE, OBJECT_TYPE_CREATURE);
+    }
+
+    if (GetLocalInt(oPC, WTHR_VAR_PC_EVENTS)) return;  // OnDamaged does it
     int nNow = GetCurrentHitPoints(oPC);
     int nLast = GetLocalInt(oPC, WTHR_VAR_LAST_HP) - 1;
     SetLocalInt(oPC, WTHR_VAR_LAST_HP, nNow + 1);
     if (nLast < 0 || nNow >= nLast) return;
-    object oDamager = GetLastDamager(oPC);
-    if (GetIsObjectValid(oDamager) && oDamager == GetLastAttacker(oPC))
-        WthrPhysicalDamage(oPC, oDamager, nLast - nNow);
+    if (GetIsObjectValid(oMelee))
+        WthrPhysicalDamage(oPC, oMelee, nLast - nNow);
+    else if (bRanged)
+        WthrPhysicalDamage(oPC, OBJECT_INVALID, nLast - nNow);
 }
 
 // One update of a creature with a loop: a player (with their party) or a

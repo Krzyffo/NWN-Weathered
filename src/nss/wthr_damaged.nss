@@ -1,23 +1,57 @@
 // wthr_damaged: creature OnDamaged, put on each NPC and monster by
-// WthrHookDamage when a player first comes near (players have no OnDamaged;
-// their loop watches their hit points instead). Runs the creature's own
-// OnDamaged script first, then blood: physical damage leaves the victim's
-// blood on it, and spatter on a melee attacker.
+// WthrHookDamage when a player first comes near, and on players by
+// WthrHookPlayer if the game allows it. Runs the creature's own OnDamaged
+// script first, then blood: physical damage leaves the victim's blood on
+// it, and spatter on a melee attacker.
 
 #include "wthr_inc"
 
+// -1 from the game means "none of this type".
 int WthrPhysical(int nType)
 {
     int n = GetDamageDealtByType(nType);
-    return n > 0 ? n : 0;  // -1: none of this type
+    return n > 0 ? n : 0;
 }
 
 void main()
 {
-    string sOwn = GetLocalString(OBJECT_SELF, WTHR_VAR_ORIG_DMG);
-    if (sOwn != "") ExecuteScript(sOwn, OBJECT_SELF);
+    object oSelf = OBJECT_SELF;
+    string sOwn = GetLocalString(oSelf, WTHR_VAR_ORIG_DMG);
+    if (sOwn != "") ExecuteScript(sOwn, oSelf);
 
+    int bPC = GetIsPC(oSelf);
+    int bDebug = GetLocalInt(GetModule(), WTHR_DEBUG);
+    // A player's OnDamaged works: their hit point check can stop.
+    if (bPC && !GetLocalInt(oSelf, WTHR_VAR_PC_EVENTS))
+    {
+        SetLocalInt(oSelf, WTHR_VAR_PC_EVENTS, TRUE);
+        if (bDebug) SendMessageToPC(oSelf, "NWN-Weathered: your OnDamaged event works; blood uses it from now on.");
+    }
+
+    object oDamager = GetLastDamager(oSelf);
+    int nTotal = GetTotalDamageDealt();
+    int nBludgeoning = GetDamageDealtByType(DAMAGE_TYPE_BLUDGEONING);
+    int nPiercing = GetDamageDealtByType(DAMAGE_TYPE_PIERCING);
+    int nSlashing = GetDamageDealtByType(DAMAGE_TYPE_SLASHING);
     int nPhysical = WthrPhysical(DAMAGE_TYPE_BLUDGEONING) + WthrPhysical(DAMAGE_TYPE_PIERCING)
                   + WthrPhysical(DAMAGE_TYPE_SLASHING);
-    WthrPhysicalDamage(OBJECT_SELF, GetLastDamager(), nPhysical);
+    string sHow = "by type";
+
+    // Some damage, but no type reported at all: judge it by the attacker
+    // instead. A creature attacking us with a weapon (in melee or with a
+    // bow) means a physical hit; a spell or a trap doesn't.
+    if (nPhysical <= 0 && nTotal > 0 && nBludgeoning < 0 && nPiercing < 0 && nSlashing < 0
+        && GetObjectType(oDamager) == OBJECT_TYPE_CREATURE && GetAttackTarget(oDamager) == oSelf)
+    {
+        nPhysical = nTotal;
+        sHow = "by attacker";
+    }
+
+    if (bDebug && bPC)
+        SendMessageToPC(oSelf, "NWN-Weathered: hit for " + IntToString(nTotal) + " by " + GetName(oDamager)
+                               + " (bludgeoning " + IntToString(nBludgeoning) + ", piercing " + IntToString(nPiercing)
+                               + ", slashing " + IntToString(nSlashing) + "): " + IntToString(nPhysical)
+                               + " physical, " + sHow + ".");
+
+    WthrPhysicalDamage(oSelf, oDamager, nPhysical);
 }

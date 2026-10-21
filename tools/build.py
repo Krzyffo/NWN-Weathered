@@ -120,12 +120,12 @@ parameter float DustAmount 0.0
 parameter float DustSpread 0.0
 parameter float SnowAmount 0.0
 parameter float BloodWounds 0.0
-parameter float BloodSpatter 0.0
 parameter float BloodDry 0.0
 parameter float BloodOwn 0.0
-parameter float SpatterR 0.0
-parameter float SpatterG 0.0
-parameter float SpatterB 0.0
+parameter float SpatterRed 0.0
+parameter float SpatterGreen 0.0
+parameter float SpatterYellow 0.0
+parameter float SpatterWhite 0.0
 parameter float PartLow {low}
 parameter float PartHigh {high}
 parameter float WoundWeight {wounds}
@@ -409,37 +409,56 @@ def _octaves(size, base_cells, count, seed, stretch_x=1):
 
 
 def _droplets(size, seed):
-    """Tileable blood droplets, 0..1: each drop is a soft disc whose value
-    is its 'order', so a shader threshold reveals more drops as the amount
-    grows instead of growing every drop at once."""
+    """Tileable blood droplets, 0..1. Each drop's value is its 'order', so
+    a shader threshold reveals more drops as the amount grows instead of
+    growing every drop at once. Round drops with satellites, and splashes:
+    drops stretched along the direction they flew, with a tail of smaller
+    drops behind them, at random angles."""
     import math
     import random
     rnd = random.Random(seed)
     out = [[0.0] * size for _ in range(size)]
 
-    def disc(cx, cy, radius, value):
-        r = int(radius) + 2
+    def blob(cx, cy, radius, value, stretch=1.0, angle=0.0):
+        """A soft-edged ellipse: radius across, radius * stretch along angle."""
+        c, s = math.cos(angle), math.sin(angle)
+        r = int(radius * stretch) + 2
         for dy in range(-r, r + 1):
             for dx in range(-r, r + 1):
-                d = (dx * dx + dy * dy) ** 0.5
+                along = (dx * c + dy * s) / stretch
+                across = -dx * s + dy * c
+                d = (along * along + across * across) ** 0.5
                 if d > radius + 1:
                     continue
                 edge = max(0.0, min(1.0, radius + 1 - d))  # soft rim
-                x, y = (cx + dx) % size, (cy + dy) % size
+                x, y = int(cx + dx) % size, int(cy + dy) % size
                 v = value * edge
                 if v > out[y][x]:
                     out[y][x] = v
 
-    for _ in range(140):
+    for _ in range(130):
         cx, cy = rnd.randrange(size), rnd.randrange(size)
-        radius = rnd.choice((1.2, 1.8, 2.5, 3.5, 5.0, 7.0))
+        radius = rnd.choice((1.5, 2.0, 3.0, 4.0, 5.5, 7.5))
         value = 0.25 + 0.75 * rnd.random()
-        disc(cx, cy, radius, value)
-        for _ in range(int(radius)):  # satellites around the bigger drops
-            a = rnd.random() * 6.2832
-            dist = radius + 2 + rnd.random() * radius * 1.5
-            disc(int(cx + dist * math.cos(a)), int(cy + dist * math.sin(a)),
-                 0.8 + rnd.random() * 1.2, value * (0.8 + 0.2 * rnd.random()))
+        if rnd.random() < 0.5:
+            # A splash: stretched, then a tail of shrinking drops behind it.
+            angle = rnd.random() * 6.2832
+            stretch = 1.6 + rnd.random() * 1.6
+            blob(cx, cy, radius * 0.8, value, stretch, angle)
+            dist = radius * 0.8 * stretch
+            drop = radius * 0.45
+            for _ in range(2 + rnd.randrange(3)):
+                dist += drop * 2.2 + 1.0
+                blob(cx - dist * math.cos(angle) + rnd.uniform(-1, 1), cy - dist * math.sin(angle) + rnd.uniform(-1, 1),
+                     max(0.8, drop), value * (0.85 + 0.15 * rnd.random()), 1.3, angle)
+                drop *= 0.7
+        else:
+            blob(cx, cy, radius, value)
+            for _ in range(int(radius * 0.7)):  # satellites around the bigger drops
+                a = rnd.random() * 6.2832
+                d = radius + 2 + rnd.random() * radius * 1.5
+                blob(cx + d * math.cos(a), cy + d * math.sin(a),
+                     1.0 + rnd.random() * 2.0, value * (0.8 + 0.2 * rnd.random()))
     return out
 
 

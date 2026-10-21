@@ -13,12 +13,12 @@ uniform float DustAmount;
 uniform float DustSpread;
 uniform float SnowAmount;
 uniform float BloodWounds;
-uniform float BloodSpatter;
 uniform float BloodDry;
 uniform float BloodOwn;
-uniform float SpatterR;
-uniform float SpatterG;
-uniform float SpatterB;
+uniform float SpatterRed;
+uniform float SpatterGreen;
+uniform float SpatterYellow;
+uniform float SpatterWhite;
 uniform float WoundWeight;
 uniform float SpatterWeight;
 uniform float SpatterFront;
@@ -30,7 +30,8 @@ uniform lowp int texture4Bound;
 uniform sampler2D texUnit4;
 
 varying float vWeatherHeight;
-varying vec2 vWeatherFacing;
+varying vec3 vWeatherNormal;
+varying vec3 vWeatherPos;
 
 // Colours in gamma space, like a texture.
 #define WEATHER_DUST_DARK   vec3(0.55, 0.46, 0.34)
@@ -43,7 +44,6 @@ varying vec2 vWeatherFacing;
 #define WEATHER_TILE_COARSE 1.5
 #define WEATHER_TILE_FINE   3.0
 #define WEATHER_DUST_EDGE   0.12   // how ragged the top edge of the dust is
-#define WEATHER_SNOW_BUMP   0.12   // snow volume: a raised edge, not a texture
 
 // ---- Noise ------------------------------------------------------------------
 
@@ -93,7 +93,7 @@ float WeatherBodyHeight()
 // swings or the creature falls over.
 float WeatherUpness()
 {
-    return gl_FrontFacing ? vWeatherFacing.x : -vWeatherFacing.x;
+    return gl_FrontFacing ? vWeatherNormal.z : -vWeatherNormal.z;
 }
 
 // ---- Dust -------------------------------------------------------------------
@@ -140,22 +140,6 @@ void ApplySnow(vec3 vNoise)
     vec3 vSnow = ApplyColorSpace(mix(WEATHER_SNOW_SHADE, WEATHER_SNOW_WHITE, vNoise.g));
     FragmentColor.rgb = mix(vCloth, vSnow, fCover);
 
-    // Volume: lean the lighting at the edge of each clump, as if it had a
-    // rounded thickness. Built from the coverage alone (smooth), not the
-    // noise, so neighbouring pixels agree.
-    #if POSITION_VIEW == 1 && VERTEX_NORMAL == 1
-        float fLump = fCover * WEATHER_SNOW_BUMP;
-        vec3 vDpDx = dFdx(vPosView);
-        vec3 vDpDy = dFdy(vPosView);
-        vec3 vR1 = cross(vDpDy, vFragmentNormal);
-        vec3 vR2 = cross(vFragmentNormal, vDpDx);
-        float fDet = dot(vDpDx, vR1);
-        vec3 vGrad = sign(fDet) * (dFdx(fLump) * vR1 + dFdy(fLump) * vR2);
-        vec3 vBent = abs(fDet) * vFragmentNormal - vGrad;
-        if (dot(vBent, vBent) > 0.0)
-            vFragmentNormal = normalize(mix(vFragmentNormal, normalize(vBent), 0.5));
-    #endif
-
     // Snow is matte: no shine, so the sky doesn't reflect in it.
     #if SPECULAR_LIGHT == 1
         #ifdef MATERIAL_SPECULARITY_GENERATE_VALUE
@@ -169,16 +153,31 @@ void ApplySnow(vec3 vNoise)
 
 // ---- Blood ------------------------------------------------------------------
 
-#define WEATHER_TILE_DROPS 3.0
+#define WEATHER_DROPS_PER_METRE 4.0   // the droplet pattern repeats about every 25 cm
 
-// Droplets, 0 (none) or the drop's order 0.25..1: a drop shows once the
-// amount is high enough for its order, so more blood brings more drops.
-float WeatherDrops(vec2 uv, vec2 vOffset)
+// Blood is placed on the model in 3D, not by its texture layout: creature
+// textures are mostly mirrored (one texture half serves both sides of a
+// chest, one texture both shins), which made every stain symmetrical. The
+// droplet texture is projected onto the model in its standing pose from
+// the side the surface faces most: front/back, left/right or top.
+// Returns (drops, blotch): drops 0 (none) or the drop's order 0.25..1 (a
+// drop shows once the amount is high enough for its order, so more blood
+// brings more drops); blotch 0..1 for the stains of heavy amounts.
+vec2 WeatherBloodSample(vec2 vOffset)
 {
+    vec3 vAxis = abs(vWeatherNormal);
+    vec2 uv;
+    if (vAxis.x >= vAxis.y && vAxis.x >= vAxis.z) uv = vWeatherPos.yz;
+    else if (vAxis.y >= vAxis.z)                uv = vWeatherPos.xz;
+    else                                         uv = vWeatherPos.xy;
+    uv = uv * WEATHER_DROPS_PER_METRE + vOffset;
     if (texture4Bound != 0)
-        return texture2D(texUnit4, uv * WEATHER_TILE_DROPS + vOffset).a;
-    float f = WeatherValueNoise((uv + vOffset) * 40.0);
-    return f > 0.72 ? 0.25 + 0.75 * (f - 0.72) / 0.28 : 0.0;
+    {
+        vec4 vTexel = texture2D(texUnit4, uv);
+        return vec2(vTexel.a, vTexel.r);
+    }
+    float f = WeatherValueNoise(uv * 25.0);
+    return vec2(f > 0.72 ? 0.25 + 0.75 * (f - 0.72) / 0.28 : 0.0, WeatherValueNoise(uv * 3.0));
 }
 
 // Gamma-space colour of blood kind 1..4 (red, green, yellow, white).
@@ -196,48 +195,68 @@ vec3 WeatherDried(vec3 vColor, float fDry)
     return mix(vColor, vColor * 0.45 + vec3(0.07, 0.035, 0.01), clamp(fDry, 0.0, 1.0));
 }
 
-// How much of a layer shows here, for an amount 0..1.
+// How much of a layer shows here, for an amount 0..1: drops appear in
+// step with the amount, so blood that builds up over an adventure looks
+// like it.
 float WeatherBloodCover(float fAmount, float fDrops, float fBlotch)
 {
-    float fDrop = fDrops > 0.0 ? smoothstep(0.0, 0.05, fDrops - (1.0 - fAmount * 1.2)) : 0.0;
+    float fShown = clamp(fAmount, 0.0, 1.0);
+    float fDrop = fDrops > 0.0 ? smoothstep(0.0, 0.05, fDrops - (1.0 - fShown * 1.15)) : 0.0;
     // Heavy amounts soak in as stains between the drops.
-    float fStain = smoothstep(0.55, 0.85, fBlotch) * fAmount * fAmount * 0.7;
+    float fStain = smoothstep(0.55, 0.85, fBlotch) * fAmount * 0.7;
     return max(fDrop, fStain);
+}
+
+// One colour of others' blood: fAmount 0..1 of blood kind fKind, drawn
+// from the droplets at vOffset.
+void ApplySpatter(float fAmount, float fKind, vec2 vOffset, float fWeight)
+{
+    if (fAmount <= 0.0) return;
+    vec2 vSample = WeatherBloodSample(vOffset);
+    float fCover = WeatherBloodCover(clamp(fAmount, 0.0, 1.0) * fWeight, vSample.x, vSample.y);
+    vec3 vBlood = ApplyColorSpace(WeatherDried(WeatherBloodColor(fKind), BloodDry));
+    FragmentColor.rgb = mix(FragmentColor.rgb, vBlood, fCover * 0.9);
 }
 
 void ApplyBlood(vec3 vNoise)
 {
     if (scriptableInt16 == 1) return;  // gore off for this player
-    float fFront = gl_FrontFacing ? vWeatherFacing.y : -vWeatherFacing.y;
+    float fFront = gl_FrontFacing ? vWeatherNormal.y : -vWeatherNormal.y;
 
     if (BloodWounds > 0.0 && BloodOwn > 0.5)
     {
         float fAmount = clamp(BloodWounds, 0.0, 1.0) * WoundWeight;
-        float fCover = WeatherBloodCover(fAmount, WeatherDrops(vTexCoords.xy, vec2(0.0)), vNoise.r);
+        vec2 vSample = WeatherBloodSample(vec2(0.0));
+        float fCover = WeatherBloodCover(fAmount, vSample.x, vSample.y);
         vec3 vBlood = ApplyColorSpace(WeatherDried(WeatherBloodColor(BloodOwn), BloodDry));
         FragmentColor.rgb = mix(FragmentColor.rgb, vBlood, fCover * 0.9);
     }
-    if (BloodSpatter > 0.0)
-    {
-        // Mostly on the front, where the blows land.
-        float fFacing = mix(1.0, smoothstep(-0.4, 0.5, fFront), SpatterFront);
-        float fAmount = clamp(BloodSpatter, 0.0, 1.0) * SpatterWeight * fFacing;
-        float fCover = WeatherBloodCover(fAmount, WeatherDrops(vTexCoords.xy, vec2(0.37, 0.61)), 1.0 - vNoise.r);
-        vec3 vColor = vec3(SpatterR, SpatterG, SpatterB);
-        vec3 vBlood = ApplyColorSpace(WeatherDried(vColor, BloodDry));
-        FragmentColor.rgb = mix(FragmentColor.rgb, vBlood, fCover * 0.9);
-    }
+    // Others' blood, one layer per colour: each uses its own part of the
+    // droplet pattern (and its own stain blotches), so red and green drops
+    // sit side by side instead of mixing into one colour.
+    // Mostly on the front, where the blows land.
+    float fFacing = mix(1.0, smoothstep(-0.4, 0.5, fFront), SpatterFront) * SpatterWeight;
+    ApplySpatter(SpatterRed, 1.0, vec2(0.37, 0.61), fFacing);
+    ApplySpatter(SpatterGreen, 2.0, vec2(0.13, 0.82), fFacing);
+    ApplySpatter(SpatterYellow, 3.0, vec2(0.71, 0.29), fFacing);
+    ApplySpatter(SpatterWhite, 4.0, vec2(0.55, 0.07), fFacing);
+}
+
+float WeatherSpatterTotal()
+{
+    return SpatterRed + SpatterGreen + SpatterYellow + SpatterWhite;
 }
 
 void main ()
 {
     FragmentColor = vec4(1.0);
     SetupStandardShaderInputs();
-    if (DustAmount > 0.0 || SnowAmount > 0.0 || BloodWounds > 0.0 || BloodSpatter > 0.0)
+    float fSpatter = WeatherSpatterTotal();
+    if (DustAmount > 0.0 || SnowAmount > 0.0 || BloodWounds > 0.0 || fSpatter > 0.0)
     {
         vec3 vNoise = WeatherNoise(vTexCoords.xy);
         if (DustAmount > 0.0) ApplyDust(vNoise);
-        if (BloodWounds > 0.0 || BloodSpatter > 0.0) ApplyBlood(vNoise);
+        if (BloodWounds > 0.0 || fSpatter > 0.0) ApplyBlood(vNoise);
         if (SnowAmount > 0.0) ApplySnow(vNoise);
     }
     ApplyStandardShader();
