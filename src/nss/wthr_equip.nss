@@ -6,11 +6,20 @@
 
 #include "wthr_inc"
 
-void main()
+void WthrRefreshLater(object oCreature)
 {
-    object oCreature = GetPCItemLastEquippedBy();
-    if (!GetIsObjectValid(oCreature)) oCreature = GetPCItemLastUnequippedBy();
     if (!GetIsObjectValid(oCreature)) return;
     if (GetLocalFloat(oCreature, WTHR_VAR_DUST) <= 0.0 && GetLocalFloat(oCreature, WTHR_VAR_SNOW) <= 0.0) return;
     DelayCommand(0.5, WthrRefresh(oCreature));
+}
+
+void main()
+{
+    // Both getters keep their last value between events, so in one of the
+    // two events the other one names whoever changed gear before. Refreshing
+    // that creature too costs little and needs no check of which event runs.
+    object oEquipped = GetPCItemLastEquippedBy();
+    object oUnequipped = GetPCItemLastUnequippedBy();
+    WthrRefreshLater(oEquipped);
+    if (oUnequipped != oEquipped) WthrRefreshLater(oUnequipped);
 }
