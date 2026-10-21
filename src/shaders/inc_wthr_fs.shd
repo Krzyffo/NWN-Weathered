@@ -116,9 +116,56 @@ void ApplyDust(vec3 vNoise)
     float fCover = fReach * smoothstep(0.0, 0.3, fDust * 1.3 * (0.45 + 0.55 * fDepth) - (1.0 - fPattern) * 0.7);
 
     vec3 vDust = ApplyColorSpace(mix(WEATHER_DUST_DARK, WEATHER_DUST_LIGHT, vNoise.g));
+    // Where dust makes the surface matte (below): under the patches only,
+    // as snow does. A film between them made the metal there matte too,
+    // and matte, the armour's light silver metal colour looked like white
+    // paint.
+    float fMatte = fCover;
+
+    // The stock shader swaps a shiny texture's real (dark) colour for a
+    // light grey and lets the shine cover it; once dust takes the shine
+    // away that grey shows, lit blue by the sky, as if painted white. Put
+    // the real colour back where the dust dulls it.
+    #if SPECULAR_LIGHT == 1 && ENVIRONMENT_MAP == 1 && NO_TEXTURE != 1
+        if (texture0Bound != 0 && fEnvMapLevel > 0.0)
+        {
+            vec3 vTexture = ApplyColorSpace(texture2D(texUnit0, vTexCoords.xy).rgb);
+            FragmentColor.rgb = mix(FragmentColor.rgb, vTexture, fMatte * fEnvMapLevel);
+        }
+    #endif
+
     float fGrey = dot(FragmentColor.rgb, vec3(0.299, 0.587, 0.114));
     vec3 vDull = mix(FragmentColor.rgb, vec3(fGrey), 0.35 * fDust * fReach);
-    FragmentColor.rgb = mix(vDull, vDust, fCover * 0.75);
+
+    // How strongly the dust colour is laid on: 75% on cloth, with soft
+    // edges. On shiny parts it has to cover faster than the shine fades
+    // (below): halfway into a patch's edge the shine is half gone, and the
+    // light grey the stock shader keeps under a shine showed through as a
+    // white ring around every patch. There it is full strength by then.
+    float fShiny = 0.0;
+    #if ENVIRONMENT_MAP == 1
+        fShiny = fEnvMapLevel;
+    #endif
+    float fColour = mix(fCover * 0.75, min(fCover * 2.0, 1.0), fShiny);
+    FragmentColor.rgb = mix(vDull, vDust, fColour);
+
+    // Dust is matte, the same way as snow: less shine and a rougher
+    // surface. The material's own metal look and highlight colour stay
+    // (replacing those turned dusty armour bronze or made it mirror the
+    // sky).
+    #if SPECULAR_LIGHT == 1
+        #ifdef MATERIAL_SPECULARITY_GENERATE_VALUE
+            // The shine drops slowly at first, so the dust colour covers
+            // the light grey under it before it shows: a twelfth of the way
+            // by a quarter into a patch's edge (armour: 98% -> 90%), then on
+            // to 2% inside.
+            float fDrop = fMatte < 0.25 ? fMatte / 3.0 : 1.0 / 12.0 + (fMatte - 0.25) * 11.0 / 9.0;
+            MATERIAL_SPECULARITY_VALUE = mix(MATERIAL_SPECULARITY_VALUE, 0.02, fDrop);
+        #endif
+        #ifdef MATERIAL_ROUGHNESS_GENERATE_VALUE
+            MATERIAL_ROUGHNESS_VALUE = mix(MATERIAL_ROUGHNESS_VALUE, 0.9, fMatte);
+        #endif
+    #endif
 }
 
 // ---- Snow -------------------------------------------------------------------
