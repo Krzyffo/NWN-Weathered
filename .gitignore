@@ -1,0 +1,9 @@
+*.ncs
+*.ndb
+__pycache__/
+tools/neverwinter/
+# Build output, written next to tools/build.py.
+tools/nwn_weathered.erf
+tools/nwn_weathered.hak
+# Beamdog game files, extracted for study; not ours to publish.
+reference/
