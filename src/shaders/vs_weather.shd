@@ -1,0 +1,26 @@
+//=============================================================================
+//
+// vs_weather.shd: NWN-Weathered
+//
+// The stock lit vertex shader (vslit_sm), plus two things measured on the
+// mesh as modelled, standing, before animation bends it, so dust and snow
+// stick to the cloth as the creature moves:
+//   vWeatherHeight  how high up its mesh the vertex sits (0..1, from the
+//                   mesh's local bounding box), for dust that builds up
+//                   from the ground; -1 when the engine gives no box
+//   vWeatherFacing  how much the surface faces up (x) and forward (y),
+//                   -1..1 each: snow settles on top, spatter on the
+//                   front (creatures face +y in their models)
+//
+//=============================================================================
+
+#define SHADER_TYPE 1
+
+#define FOG 1
+#define KEYHOLING 1
+
+#define NORMAL_MAP 0
+#define ENVIRONMENT_MAP 1
+#define LIGHTING 1
+
+#include "inc_wthr_vs"

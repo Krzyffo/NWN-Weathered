@@ -1,0 +1,245 @@
+//=============================================================================
+//
+// inc_wthr_fs.shd: NWN-Weathered, the fragment shader shared by
+// fs_weather (with an environment map) and fs_wthr_plain (without).
+// Define SHADER_TYPE, LIGHTING and the *_MAP switches before including.
+//
+//=============================================================================
+
+#include "inc_standard"
+#include "inc_scriptable"
+
+uniform float DustAmount;
+uniform float DustSpread;
+uniform float SnowAmount;
+uniform float BloodWounds;
+uniform float BloodSpatter;
+uniform float BloodDry;
+uniform float BloodOwn;
+uniform float SpatterR;
+uniform float SpatterG;
+uniform float SpatterB;
+uniform float WoundWeight;
+uniform float SpatterWeight;
+uniform float SpatterFront;
+uniform float PartLow;
+uniform float PartHigh;
+
+// The noise texture. HEIGHT_MAP is off, so the slot is ours.
+uniform lowp int texture4Bound;
+uniform sampler2D texUnit4;
+
+varying float vWeatherHeight;
+varying vec2 vWeatherFacing;
+
+// Colours in gamma space, like a texture.
+#define WEATHER_DUST_DARK   vec3(0.55, 0.46, 0.34)
+#define WEATHER_DUST_LIGHT  vec3(0.78, 0.68, 0.52)
+#define WEATHER_SNOW_SHADE  vec3(0.80, 0.86, 0.95)
+#define WEATHER_SNOW_WHITE  vec3(0.96, 0.98, 1.00)
+
+// Noise repeats per texture width. Creature textures are small on screen,
+// so anything finer turns into pixel grit.
+#define WEATHER_TILE_COARSE 1.5
+#define WEATHER_TILE_FINE   3.0
+#define WEATHER_DUST_EDGE   0.12   // how ragged the top edge of the dust is
+#define WEATHER_SNOW_BUMP   0.12   // snow volume: a raised edge, not a texture
+
+// ---- Noise ------------------------------------------------------------------
+
+float WeatherHash(vec2 p)
+{
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float WeatherValueNoise(vec2 p)
+{
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = WeatherHash(i);
+    float b = WeatherHash(i + vec2(1.0, 0.0));
+    float c = WeatherHash(i + vec2(0.0, 1.0));
+    float d = WeatherHash(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// R coarse, G fine, B streaks at uv.
+vec3 WeatherNoise(vec2 uv)
+{
+    if (texture4Bound != 0)
+    {
+        return vec3(texture2D(texUnit4, uv * WEATHER_TILE_COARSE).r,
+                    texture2D(texUnit4, uv * WEATHER_TILE_FINE).g,
+                    texture2D(texUnit4, uv * WEATHER_TILE_COARSE).b);
+    }
+    vec2 p = uv * 6.0;
+    return vec3(WeatherValueNoise(p) * 0.65 + WeatherValueNoise(p * 2.3 + 17.0) * 0.35,
+                WeatherValueNoise(p * 2.5 + 5.0),
+                WeatherValueNoise(vec2(p.x * 0.25, p.y * 2.0) + 31.0));
+}
+
+// ---- Where on the body ------------------------------------------------------
+
+// 0 at the feet, 1 at the top of the head.
+float WeatherBodyHeight()
+{
+    float fLocal = vWeatherHeight < 0.0 ? 0.5 : vWeatherHeight;
+    return mix(PartLow, PartHigh, fLocal);
+}
+
+// How much a surface faces up, -1..1 (z is up in NWN), in the creature's
+// standing pose: snow that settled on a shoulder stays on it when the arm
+// swings or the creature falls over.
+float WeatherUpness()
+{
+    return gl_FrontFacing ? vWeatherFacing.x : -vWeatherFacing.x;
+}
+
+// ---- Dust -------------------------------------------------------------------
+
+void ApplyDust(vec3 vNoise)
+{
+    float fDust = clamp(DustAmount, 0.0, 1.0);
+    float fSpread = clamp(DustSpread, 0.0, 1.0);
+    float fHeight = WeatherBodyHeight();
+
+    // How high the dust reaches: the boots at first, past the waist when
+    // heavy; a storm lifts it over everything.
+    float fTop = mix(0.1 + 0.75 * fDust, 1.3, fSpread);
+    float fEdge = fTop - fHeight + (vNoise.r - 0.5) * WEATHER_DUST_EDGE * 2.0;
+    float fReach = smoothstep(0.0, 0.12, fEdge);
+
+    // Thickest near the ground; in a storm, wind streaks add to it.
+    float fDepth = clamp((fTop - fHeight) / max(fTop, 0.05), 0.0, 1.0);
+    float fPattern = mix(vNoise.r, vNoise.b, 0.35 * fSpread);
+    float fCover = fReach * smoothstep(0.0, 0.3, fDust * 1.3 * (0.45 + 0.55 * fDepth) - (1.0 - fPattern) * 0.7);
+
+    vec3 vDust = ApplyColorSpace(mix(WEATHER_DUST_DARK, WEATHER_DUST_LIGHT, vNoise.g));
+    float fGrey = dot(FragmentColor.rgb, vec3(0.299, 0.587, 0.114));
+    vec3 vDull = mix(FragmentColor.rgb, vec3(fGrey), 0.35 * fDust * fReach);
+    FragmentColor.rgb = mix(vDull, vDust, fCover * 0.75);
+}
+
+// ---- Snow -------------------------------------------------------------------
+
+void ApplySnow(vec3 vNoise)
+{
+    float fSnow = clamp(SnowAmount, 0.0, 1.0);
+
+    // Only surfaces that face up hold snow; steeper ones lose it fast.
+    float fUp = WeatherUpness();
+    float fSettle = smoothstep(0.3, 0.8, fUp);
+
+    // Clumps from the coarse noise, with soft edges.
+    float fCover = smoothstep(0.0, 0.35, fSnow * 1.4 * fSettle - (1.0 - vNoise.r) * 0.7);
+
+    // A soft shadow on the cloth just around the snow makes it sit on top.
+    float fRim = fCover * (1.0 - fCover) * 4.0;
+    vec3 vCloth = FragmentColor.rgb * (1.0 - 0.2 * fRim);
+    vec3 vSnow = ApplyColorSpace(mix(WEATHER_SNOW_SHADE, WEATHER_SNOW_WHITE, vNoise.g));
+    FragmentColor.rgb = mix(vCloth, vSnow, fCover);
+
+    // Volume: lean the lighting at the edge of each clump, as if it had a
+    // rounded thickness. Built from the coverage alone (smooth), not the
+    // noise, so neighbouring pixels agree.
+    #if POSITION_VIEW == 1 && VERTEX_NORMAL == 1
+        float fLump = fCover * WEATHER_SNOW_BUMP;
+        vec3 vDpDx = dFdx(vPosView);
+        vec3 vDpDy = dFdy(vPosView);
+        vec3 vR1 = cross(vDpDy, vFragmentNormal);
+        vec3 vR2 = cross(vFragmentNormal, vDpDx);
+        float fDet = dot(vDpDx, vR1);
+        vec3 vGrad = sign(fDet) * (dFdx(fLump) * vR1 + dFdy(fLump) * vR2);
+        vec3 vBent = abs(fDet) * vFragmentNormal - vGrad;
+        if (dot(vBent, vBent) > 0.0)
+            vFragmentNormal = normalize(mix(vFragmentNormal, normalize(vBent), 0.5));
+    #endif
+
+    // Snow is matte: no shine, so the sky doesn't reflect in it.
+    #if SPECULAR_LIGHT == 1
+        #ifdef MATERIAL_SPECULARITY_GENERATE_VALUE
+            MATERIAL_SPECULARITY_VALUE = mix(MATERIAL_SPECULARITY_VALUE, 0.02, fCover);
+        #endif
+        #ifdef MATERIAL_ROUGHNESS_GENERATE_VALUE
+            MATERIAL_ROUGHNESS_VALUE = mix(MATERIAL_ROUGHNESS_VALUE, 0.9, fCover);
+        #endif
+    #endif
+}
+
+// ---- Blood ------------------------------------------------------------------
+
+#define WEATHER_TILE_DROPS 3.0
+
+// Droplets, 0 (none) or the drop's order 0.25..1: a drop shows once the
+// amount is high enough for its order, so more blood brings more drops.
+float WeatherDrops(vec2 uv, vec2 vOffset)
+{
+    if (texture4Bound != 0)
+        return texture2D(texUnit4, uv * WEATHER_TILE_DROPS + vOffset).a;
+    float f = WeatherValueNoise((uv + vOffset) * 40.0);
+    return f > 0.72 ? 0.25 + 0.75 * (f - 0.72) / 0.28 : 0.0;
+}
+
+// Gamma-space colour of blood kind 1..4 (red, green, yellow, white).
+vec3 WeatherBloodColor(float fKind)
+{
+    if (fKind < 1.5) return vec3(0.42, 0.02, 0.02);
+    if (fKind < 2.5) return vec3(0.18, 0.40, 0.06);
+    if (fKind < 3.5) return vec3(0.65, 0.55, 0.08);
+    return vec3(0.82, 0.82, 0.76);
+}
+
+// Dried blood is darker and browner.
+vec3 WeatherDried(vec3 vColor, float fDry)
+{
+    return mix(vColor, vColor * 0.45 + vec3(0.07, 0.035, 0.01), clamp(fDry, 0.0, 1.0));
+}
+
+// How much of a layer shows here, for an amount 0..1.
+float WeatherBloodCover(float fAmount, float fDrops, float fBlotch)
+{
+    float fDrop = fDrops > 0.0 ? smoothstep(0.0, 0.05, fDrops - (1.0 - fAmount * 1.2)) : 0.0;
+    // Heavy amounts soak in as stains between the drops.
+    float fStain = smoothstep(0.55, 0.85, fBlotch) * fAmount * fAmount * 0.7;
+    return max(fDrop, fStain);
+}
+
+void ApplyBlood(vec3 vNoise)
+{
+    if (scriptableInt16 == 1) return;  // gore off for this player
+    float fFront = gl_FrontFacing ? vWeatherFacing.y : -vWeatherFacing.y;
+
+    if (BloodWounds > 0.0 && BloodOwn > 0.5)
+    {
+        float fAmount = clamp(BloodWounds, 0.0, 1.0) * WoundWeight;
+        float fCover = WeatherBloodCover(fAmount, WeatherDrops(vTexCoords.xy, vec2(0.0)), vNoise.r);
+        vec3 vBlood = ApplyColorSpace(WeatherDried(WeatherBloodColor(BloodOwn), BloodDry));
+        FragmentColor.rgb = mix(FragmentColor.rgb, vBlood, fCover * 0.9);
+    }
+    if (BloodSpatter > 0.0)
+    {
+        // Mostly on the front, where the blows land.
+        float fFacing = mix(1.0, smoothstep(-0.4, 0.5, fFront), SpatterFront);
+        float fAmount = clamp(BloodSpatter, 0.0, 1.0) * SpatterWeight * fFacing;
+        float fCover = WeatherBloodCover(fAmount, WeatherDrops(vTexCoords.xy, vec2(0.37, 0.61)), 1.0 - vNoise.r);
+        vec3 vColor = vec3(SpatterR, SpatterG, SpatterB);
+        vec3 vBlood = ApplyColorSpace(WeatherDried(vColor, BloodDry));
+        FragmentColor.rgb = mix(FragmentColor.rgb, vBlood, fCover * 0.9);
+    }
+}
+
+void main ()
+{
+    FragmentColor = vec4(1.0);
+    SetupStandardShaderInputs();
+    if (DustAmount > 0.0 || SnowAmount > 0.0 || BloodWounds > 0.0 || BloodSpatter > 0.0)
+    {
+        vec3 vNoise = WeatherNoise(vTexCoords.xy);
+        if (DustAmount > 0.0) ApplyDust(vNoise);
+        if (BloodWounds > 0.0 || BloodSpatter > 0.0) ApplyBlood(vNoise);
+        if (SnowAmount > 0.0) ApplySnow(vNoise);
+    }
+    ApplyStandardShader();
+    gl_FragColor = FragmentColor;
+}

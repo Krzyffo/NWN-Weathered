@@ -4,11 +4,12 @@
   py tools/build.py --list FILE   print the contents of an .erf/.hak
 
 Writes two files next to this script:
-- nwn_weathered.hak: the weather shader, one .mtr material per creature
-  texture of the base game, and the lookup tables the scripts use to find
-  a creature's materials.
-- nwn_weathered.erf: src/nss/*.nss and their compiled .ncs, for
-  File > Import in the toolset.
+- nwn_weathered.hak: the weather shaders, a noise texture, one .mtr
+  material per creature texture of the base game, and the lookup tables
+  the scripts use to find a creature's materials.
+- nwn_weathered.erf: src/nss/*.nss and their compiled .ncs, and the
+  clothes brush blueprint (wthr_brush.uti), for File > Import in the
+  toolset.
 
 Why the tables: the engine gives a texture a material when a .mtr of the
 same name exists, and a script sets a material's values on one creature
@@ -44,9 +45,9 @@ ERF_OUT = os.path.join(TOOLS, "nwn_weathered.erf")
 HAK_OUT = os.path.join(TOOLS, "nwn_weathered.hak")
 COMPILER = os.path.join(TOOLS, "neverwinter", "nwn_script_comp.exe")
 
-RES_TYPES = {"nss": 2009, "ncs": 2010, "2da": 2017, "shd": 2069, "mtr": 2072}
+RES_TYPES = {"tga": 3, "nss": 2009, "ncs": 2010, "2da": 2017, "uti": 2025, "shd": 2069, "mtr": 2072}
 TYPE_EXT = {v: k for k, v in RES_TYPES.items()}
-T_TGA, T_PLT, T_MDL, T_2DA, T_DDS, T_MTR = 3, 6, 2002, 2017, 2033, 2072
+T_TGA, T_PLT, T_MDL, T_2DA, T_TXI, T_DDS, T_MTR = 3, 6, 2002, 2017, 2022, 2033, 2072
 HEADER_SIZE = 160
 KEY_SIZE = 24
 RES_SIZE = 8
@@ -57,11 +58,88 @@ PARTS = ["footr", "footl", "shinr", "shinl", "legl", "legr", "pelvis", "chest", 
          "forer", "forel", "bicepr", "bicepl", "shor", "shol", "handr", "handl", "robe", "head"]
 PART_MODEL = re.compile(r"^(p[mf][a-z]\d+)_(" + "|".join(PARTS) + r")(\d{3})$")
 
-MATERIAL = """customshadervs vslit_sm
-customshaderfs fs_weather
+# Where each body part sits on a standing figure, as a share of its height
+# (feet 0, top of the head 1). The shader grades within each part from its
+# low to its high end, so dust can climb from the boots up.
+PART_HEIGHT = {
+    "footr": (0.0, 0.08), "footl": (0.0, 0.08),
+    "shinr": (0.05, 0.3), "shinl": (0.05, 0.3),
+    "legl": (0.28, 0.5), "legr": (0.28, 0.5),
+    "pelvis": (0.45, 0.58), "belt": (0.52, 0.6),
+    "handr": (0.38, 0.48), "handl": (0.38, 0.48),
+    "forer": (0.45, 0.62), "forel": (0.45, 0.62),
+    "bicepr": (0.6, 0.76), "bicepl": (0.6, 0.76),
+    "chest": (0.56, 0.82), "shor": (0.76, 0.86), "shol": (0.76, 0.86),
+    "neck": (0.8, 0.87), "head": (0.85, 1.0),
+    "robe": (0.05, 0.85),
+}
+WHOLE_BODY = (0.0, 1.0)  # monsters: one texture covers everything
+
+# How much blood each part catches: (wounds, spatter). Wounds land on the
+# body where blows fall; spatter from hitting others lands on the hands and
+# arms first, then the chest and face.
+PART_BLOOD = {
+    "footr": (0.2, 0.1), "footl": (0.2, 0.1),
+    "shinr": (0.5, 0.15), "shinl": (0.5, 0.15),
+    "legl": (0.7, 0.2), "legr": (0.7, 0.2),
+    "pelvis": (0.8, 0.3), "belt": (0.6, 0.3),
+    "handr": (0.5, 1.0), "handl": (0.5, 0.9),
+    "forer": (0.7, 0.9), "forel": (0.7, 0.8),
+    "bicepr": (0.7, 0.5), "bicepl": (0.7, 0.45),
+    "chest": (1.0, 0.6), "shor": (0.6, 0.4), "shol": (0.6, 0.4),
+    "neck": (0.5, 0.45), "head": (0.4, 0.45),
+    "robe": (0.8, 0.4),
+}
+MONSTER_BLOOD = (0.8, 0.6)
+
+# Placeables and doors: a designer sets their look in variables. Blood on
+# them shows evenly (no "front"), dust climbs each mesh from its bottom.
+OBJECT = "object"
+OBJECT_BLOOD = (1.0, 1.0)
+
+# Object tables: (2DA in the game, its model column, our table).
+OBJECT_TABLES = [
+    ("placeables", "ModelName", "wthr_plc"),
+    ("genericdoors", "ModelName", "wthr_gdoor"),
+    ("doortypes", "Model", "wthr_door"),
+]
+
+NOISE_TEXTURE = "wthr_noise"
+NOISE_SIZE = 256
+
+# Values the scripts set per creature start at 0; PartLow/PartHigh and the
+# blood weights are fixed per texture. texture4 is the noise (the shader's
+# height-map slot). Shaders: vs_/fs_weather have the environment map, as
+# creature textures need (their alpha is shininess: metal armour);
+# vs_/fs_wthr_plain don't, for placeables and doors, whose alpha is
+# transparency unless their .txi asks for an environment map.
+MATERIAL = """customshadervs {vs}
+customshaderfs {fs}
+texture4 {noise}
 parameter float DustAmount 0.0
+parameter float DustSpread 0.0
 parameter float SnowAmount 0.0
+parameter float BloodWounds 0.0
+parameter float BloodSpatter 0.0
+parameter float BloodDry 0.0
+parameter float BloodOwn 0.0
+parameter float SpatterR 0.0
+parameter float SpatterG 0.0
+parameter float SpatterB 0.0
+parameter float PartLow {low}
+parameter float PartHigh {high}
+parameter float WoundWeight {wounds}
+parameter float SpatterWeight {spatter}
+parameter float SpatterFront {front}
 """
+
+# The clothes brush: a small misc item ("Rags" look) with Unique Power Self
+# Only, unlimited uses; using it runs OnActivateItem (wthr_activate).
+BRUSH_RESREF = "wthr_brush"
+BRUSH_TEMPLATE = "nw_it_msmlmisc21"   # Rags
+BRUSH_NAME = "Clothes Brush"
+BRUSH_DESCRIPTION = ("A stiff-bristled brush for beating the dust and snow out of travelling clothes. "
+                     "Use it to clean yourself up, or type /brush.")
 
 
 def write_erf(out_path, entries, file_type=b"ERF "):
@@ -200,8 +278,11 @@ def model_textures(blob, textures):
 
 
 def scan_game():
-    textures, models, stock_materials = set(), {}, set()
-    appearance = None
+    """(textures, models, stock materials, {2da name: rows}, textures whose
+    .txi asks for an environment map) of the game."""
+    textures, models, stock_materials, shiny = set(), {}, set(), set()
+    wanted = {"appearance"} | {t[0] for t in OBJECT_TABLES}
+    found = {}
     for resref, rtype, bif, idx in nwn_key.all_entries():
         if rtype in (T_TGA, T_DDS, T_PLT):
             textures.add(resref)
@@ -209,16 +290,39 @@ def scan_game():
             models[resref] = (bif, idx)
         elif rtype == T_MTR:
             stock_materials.add(resref)
-        elif rtype == T_2DA and resref == "appearance":
-            appearance = (bif, idx)
-    # Later archives override earlier ones; the last copy of appearance.2da wins.
-    rows = parse_2da(nwn_key.read_bif_resource(*appearance).decode("latin-1"))
-    return textures, models, stock_materials, rows
+        elif rtype == T_TXI:
+            txi = nwn_key.read_bif_resource(bif, idx).lower()
+            if b"envmaptexture" in txi or b"bumpyshinytexture" in txi:
+                shiny.add(resref)
+        elif rtype == T_2DA and resref in wanted:
+            found[resref] = (bif, idx)  # later archives override earlier ones
+    tables = {name: parse_2da(nwn_key.read_bif_resource(*loc).decode("latin-1")) for name, loc in found.items()}
+    return textures, models, stock_materials, tables, shiny
+
+
+def build_object_tables(textures, models, game_tables, used):
+    """wthr_plc / wthr_gdoor / wthr_door: the textures of each placeable and
+    door appearance, rows as in the game's tables."""
+    tables = {}
+    for source, column, name in OBJECT_TABLES:
+        lines = ["2DA V2.0", "", "    TEXTURES"]
+        for row, cells in enumerate(game_tables.get(source, [])):
+            model = cells.get(column, "****").lower()
+            tex = []
+            if model in models:
+                tex = model_textures(nwn_key.read_bif_resource(*models[model]), textures)
+                for t in tex:
+                    used.setdefault(t, OBJECT)
+            lines.append(f"{row} " + (";".join(tex) or "****"))
+        tables[name] = "\n".join(lines) + "\n"
+    return tables
 
 
 def build_tables(textures, models, appearance_rows):
-    """(2DA files as {resref: text}, set of textures used)."""
-    used = set()
+    """(2DA files as {resref: text}, {texture: body part, or None for a
+    monster} for every texture used). A texture shared by several parts
+    keeps the first part."""
+    used = {}
 
     # Player body parts: {part: {prefix: {number: textures}}}
     parts = {p: {} for p in PARTS}
@@ -230,7 +334,8 @@ def build_tables(textures, models, appearance_rows):
         tex = model_textures(nwn_key.read_bif_resource(*loc), textures)
         if tex:
             parts[part].setdefault(prefix, {})[number] = tex
-            used.update(tex)
+            for t in tex:
+                used.setdefault(t, part)
 
     tables = {}
     for part, by_prefix in parts.items():
@@ -249,10 +354,165 @@ def build_tables(textures, models, appearance_rows):
         tex = []
         if cells.get("MODELTYPE", "").upper() != "P" and model in models:
             tex = model_textures(nwn_key.read_bif_resource(*models[model]), textures)
-            used.update(tex)
+            for t in tex:
+                used.setdefault(t, None)
         lines.append(f"{row} " + (";".join(tex) or "****"))
     tables["wthr_appear"] = "\n".join(lines) + "\n"
     return tables, used
+
+
+# ---- Generated content -----------------------------------------------------
+
+def _value_noise(size, cells, seed, stretch_x=1):
+    """Tileable value noise, size x size, values 0..1. cells: lattice points
+    across (must divide size); stretch_x > 1 makes streaks along x."""
+    import random
+    rnd = random.Random(seed)
+    cx, cy = max(1, cells // stretch_x), cells
+    grid = [[rnd.random() for _ in range(cx)] for _ in range(cy)]
+
+    def smooth(t):
+        return t * t * (3 - 2 * t)
+
+    out = []
+    for y in range(size):
+        fy = y * cy / size
+        y0 = int(fy)
+        ty = smooth(fy - y0)
+        row0, row1 = grid[y0 % cy], grid[(y0 + 1) % cy]
+        line = []
+        for x in range(size):
+            fx = x * cx / size
+            x0 = int(fx)
+            tx = smooth(fx - x0)
+            a = row0[x0 % cx] + (row0[(x0 + 1) % cx] - row0[x0 % cx]) * tx
+            b = row1[x0 % cx] + (row1[(x0 + 1) % cx] - row1[x0 % cx]) * tx
+            line.append(a + (b - a) * ty)
+        out.append(line)
+    return out
+
+
+def _octaves(size, base_cells, count, seed, stretch_x=1):
+    total = [[0.0] * size for _ in range(size)]
+    weight_sum, weight = 0.0, 1.0
+    for o in range(count):
+        layer = _value_noise(size, base_cells << o, seed + o, stretch_x)
+        for y in range(size):
+            row, src = total[y], layer[y]
+            for x in range(size):
+                row[x] += src[x] * weight
+        weight_sum += weight
+        weight *= 0.5
+    lo = min(min(r) for r in total)
+    hi = max(max(r) for r in total)
+    return [[(v - lo) / (hi - lo) for v in r] for r in total]
+
+
+def _droplets(size, seed):
+    """Tileable blood droplets, 0..1: each drop is a soft disc whose value
+    is its 'order', so a shader threshold reveals more drops as the amount
+    grows instead of growing every drop at once."""
+    import math
+    import random
+    rnd = random.Random(seed)
+    out = [[0.0] * size for _ in range(size)]
+
+    def disc(cx, cy, radius, value):
+        r = int(radius) + 2
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                d = (dx * dx + dy * dy) ** 0.5
+                if d > radius + 1:
+                    continue
+                edge = max(0.0, min(1.0, radius + 1 - d))  # soft rim
+                x, y = (cx + dx) % size, (cy + dy) % size
+                v = value * edge
+                if v > out[y][x]:
+                    out[y][x] = v
+
+    for _ in range(140):
+        cx, cy = rnd.randrange(size), rnd.randrange(size)
+        radius = rnd.choice((1.2, 1.8, 2.5, 3.5, 5.0, 7.0))
+        value = 0.25 + 0.75 * rnd.random()
+        disc(cx, cy, radius, value)
+        for _ in range(int(radius)):  # satellites around the bigger drops
+            a = rnd.random() * 6.2832
+            dist = radius + 2 + rnd.random() * radius * 1.5
+            disc(int(cx + dist * math.cos(a)), int(cy + dist * math.sin(a)),
+                 0.8 + rnd.random() * 1.2, value * (0.8 + 0.2 * rnd.random()))
+    return out
+
+
+def noise_tga():
+    """The noise texture, a tileable 32-bit TGA:
+    R = coarse blotches (where dust and snow gather), G = fine grain (colour
+    variation), B = horizontal streaks (wind-blown dust), A = blood
+    droplets: round spots of many sizes, the bigger ones with a ring of
+    small satellite drops."""
+    size = NOISE_SIZE
+    red = _octaves(size, 4, 4, 11)
+    green = _octaves(size, 32, 3, 23)
+    blue = _octaves(size, 8, 3, 37, stretch_x=4)
+    alpha = _droplets(size, 53)
+    header = struct.pack("<BBBHHBHHHHBB", 0, 0, 2, 0, 0, 0, 0, 0, size, size, 32, 8)
+    pixels = bytearray()
+    for y in range(size):
+        for x in range(size):
+            pixels += bytes((int(blue[y][x] * 255), int(green[y][x] * 255), int(red[y][x] * 255),
+                             int(alpha[y][x] * 255)))
+    return header + bytes(pixels)
+
+
+def material(part, shiny=True):
+    """The material for a texture of a body part, a monster (None) or an
+    object (OBJECT); shiny: with the environment map."""
+    if part == OBJECT:
+        (low, high), (wounds, spatter), front = WHOLE_BODY, OBJECT_BLOOD, 0.0
+    elif part:
+        (low, high), (wounds, spatter), front = PART_HEIGHT[part], PART_BLOOD[part], 0.75
+    else:
+        (low, high), (wounds, spatter), front = WHOLE_BODY, MONSTER_BLOOD, 0.75
+    vs, fs = ("vs_weather", "fs_weather") if shiny else ("vs_wthr_plain", "fs_wthr_plain")
+    return MATERIAL.format(vs=vs, fs=fs, noise=NOISE_TEXTURE, low=f"{low:.2f}", high=f"{high:.2f}",
+                           wounds=f"{wounds:.2f}", spatter=f"{spatter:.2f}", front=f"{front:.2f}")
+
+
+def brush_uti():
+    """The clothes brush blueprint, built from the stock Rags item."""
+    import json
+    gff = os.path.join(TOOLS, "neverwinter", "nwn_gff.exe")
+    for resref, rtype, bif, idx in nwn_key.all_entries():
+        if rtype == 2025 and resref == BRUSH_TEMPLATE:
+            template = nwn_key.read_bif_resource(bif, idx)
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "in.uti")
+        with open(src, "wb") as f:
+            f.write(template)
+        item = json.loads(subprocess.run([gff, "-i", src, "-k", "json"], capture_output=True, check=True).stdout)
+        item["TemplateResRef"]["value"] = BRUSH_RESREF
+        item["Tag"]["value"] = BRUSH_RESREF
+        item["LocalizedName"]["value"] = {"0": BRUSH_NAME}
+        item["DescIdentified"]["value"] = {"0": BRUSH_DESCRIPTION}
+        item["Description"]["value"] = {"0": BRUSH_DESCRIPTION}
+        item["Cost"]["value"] = 2
+        item["Plot"]["value"] = 0
+        item["PropertiesList"]["value"] = [{
+            "__struct_id": 0,
+            "PropertyName": {"type": "word", "value": 15},   # ITEM_PROPERTY_CAST_SPELL
+            "Subtype": {"type": "word", "value": 335},       # Unique Power Self Only
+            "CostTable": {"type": "byte", "value": 3},
+            "CostValue": {"type": "word", "value": 13},      # unlimited uses
+            "Param1": {"type": "byte", "value": 255},
+            "Param1Value": {"type": "byte", "value": 255},
+            "ChanceAppear": {"type": "byte", "value": 100},
+        }]
+        json_path = os.path.join(tmp, "brush.json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(item, f)
+        out = os.path.join(tmp, "brush.uti")
+        subprocess.run([gff, "-i", json_path, "-l", "json", "-o", out, "-k", "gff"], check=True)
+        with open(out, "rb") as f:
+            return f.read()
 
 
 # ---- Build -----------------------------------------------------------------
@@ -277,19 +537,25 @@ def main():
         ])
         if result.returncode != 0:
             sys.exit("compile failed")
-        write_erf(ERF_OUT, read_file_entries(files(NSS, ".nss") + files(ncs, ".ncs")))
+        scripts = read_file_entries(files(NSS, ".nss") + files(ncs, ".ncs"))
+    # The brush blueprint goes with the scripts, so it shows up in the
+    # module's item palette after the import.
+    write_erf(ERF_OUT, scripts + [(BRUSH_RESREF, "uti", brush_uti())])
 
     print("reading the game's creature models...")
-    textures, models, stock_materials, appearance = scan_game()
-    tables, used = build_tables(textures, models, appearance)
+    textures, models, stock_materials, game_tables, shiny = scan_game()
+    tables, used = build_tables(textures, models, game_tables["appearance"])
+    print("reading the game's placeable and door models...")
+    tables.update(build_object_tables(textures, models, game_tables, used))
     # A texture that already has a stock material keeps it (the old heads).
-    materials = sorted(used - stock_materials)
-    print(f"{len(materials)} creature textures get the weather material "
-          f"({len(used & stock_materials)} keep their stock material)")
+    materials = sorted(set(used) - stock_materials)
+    print(f"{len(materials)} creature, placeable and door textures get the weather material "
+          f"({len(set(used) & stock_materials)} keep their stock material)")
 
     entries = read_file_entries(files(SHADERS, ".shd"))
+    entries.append((NOISE_TEXTURE, "tga", noise_tga()))
     entries += [(name, "2da", text.encode("ascii")) for name, text in sorted(tables.items())]
-    entries += [(name, "mtr", MATERIAL.encode("ascii")) for name in materials]
+    entries += [(name, "mtr", material(used[name], used[name] != OBJECT or name in shiny).encode("ascii")) for name in materials]
     write_erf(HAK_OUT, entries, b"HAK ")
     print("Copy nwn_weathered.hak to your NWN hak folder and import nwn_weathered.erf into your module.")
 

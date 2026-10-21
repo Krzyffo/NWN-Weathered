@@ -1,33 +1,41 @@
-// wthr_chat: module OnPlayerChat, test commands for the weather materials.
-//   /dust 0.6         make yourself dusty (0..1)
-//   /snow 0.6         make yourself snowy (0..1)
-//   /dust 0.6 near    the same on the nearest other creature (players too)
-//   /clean            remove dust and snow from yourself
-//   /clean near       ... from the nearest creature
-//   /wthr mats        list your materials (add "near" for the nearest creature)
-// If the module already has an OnPlayerChat script, add this line to it:
+// wthr_chat: module OnPlayerChat (set by wthr_modload, or add this line to
+// the module's own OnPlayerChat script:
 //     ExecuteScript("wthr_chat", OBJECT_SELF);
+//
+// For everyone:
+//   /dirt        how dusty and snowy you and your companions are
+//   /brush       brush yourself down; needs a clothes brush
+// Test commands (/dust, /snow, /storm, /clean, /wthr): see wthr_cmd_inc. A
+// DM gets a cursor to pick the creature (wthr_target does the rest); add
+// "near" for the nearest creature or "me" for yourself instead.
 
-#include "wthr_inc"
-
-// The word after the command, and whether "near" follows.
-string WthrArg(string sMsg, int nSkip)
-{
-    string s = GetStringRight(sMsg, GetStringLength(sMsg) - nSkip);
-    while (GetStringLeft(s, 1) == " ") s = GetStringRight(s, GetStringLength(s) - 1);
-    int nSpace = FindSubString(s, " ");
-    return nSpace < 0 ? s : GetStringLeft(s, nSpace);
-}
+#include "wthr_cmd_inc"
 
 void main()
 {
+    WthrRunOriginal(EVENT_SCRIPT_MODULE_ON_PLAYER_CHAT);
+
     object oPC = GetPCChatSpeaker();
     string sMsg = GetStringLowerCase(GetPCChatMessage());
-    int bDust = GetStringLeft(sMsg, 5) == "/dust";
-    int bSnow = GetStringLeft(sMsg, 5) == "/snow";
-    int bClean = GetStringLeft(sMsg, 6) == "/clean";
-    int bMats = GetStringLeft(sMsg, 10) == "/wthr mats";
-    if (!bDust && !bSnow && !bClean && !bMats) return;
+
+    if (WthrIsCommand(sMsg, "/dirt"))
+    {
+        SetPCChatMessage("");
+        WthrDirtReport(oPC);
+        return;
+    }
+
+    if (WthrIsCommand(sMsg, "/brush"))
+    {
+        SetPCChatMessage("");
+        if (!GetIsObjectValid(GetItemPossessedBy(oPC, WTHR_BRUSH_TAG)))
+            SendMessageToPC(oPC, "You need a clothes brush.");
+        else if (!WthrBrush(oPC))
+            SendMessageToPC(oPC, "Your clothes are clean already.");
+        return;
+    }
+
+    if (!WthrIsTestCommand(sMsg) || !WthrCanTest(oPC)) return;
     SetPCChatMessage("");
 
     object oTarget = oPC;
@@ -40,29 +48,13 @@ void main()
             return;
         }
     }
-
-    if (bMats)
+    else if (WthrIsDM(oPC) && FindSubString(sMsg, " me") < 0)
     {
-        string sList = WthrMaterials(oTarget);
-        SendMessageToPC(oPC, GetName(oTarget) + " (appearance " + IntToString(GetAppearanceType(oTarget))
-                             + "): " + (sList == ";" ? "no materials found" : sList));
+        SetLocalString(oPC, WTHR_VAR_PENDING, sMsg);
+        SendMessageToPC(oPC, "Pick a creature, placeable or door for " + sMsg + " (right-click to cancel).");
+        EnterTargetingMode(oPC, OBJECT_TYPE_CREATURE | OBJECT_TYPE_PLACEABLE | OBJECT_TYPE_DOOR,
+                           MOUSECURSOR_MAGIC, MOUSECURSOR_NOMAGIC);
         return;
     }
-
-    float fDust = GetLocalFloat(oTarget, WTHR_VAR_DUST);
-    float fSnow = GetLocalFloat(oTarget, WTHR_VAR_SNOW);
-    if (bClean)
-    {
-        fDust = 0.0;
-        fSnow = 0.0;
-    }
-    else
-    {
-        float fValue = StringToFloat(WthrArg(sMsg, 5));
-        if (bDust) fDust = fValue;
-        else       fSnow = fValue;
-    }
-    WthrSet(oTarget, fDust, fSnow);
-    SendMessageToPC(oPC, GetName(oTarget) + ": dust " + FloatToString(GetLocalFloat(oTarget, WTHR_VAR_DUST), 0, 2)
-                         + ", snow " + FloatToString(GetLocalFloat(oTarget, WTHR_VAR_SNOW), 0, 2) + ".");
+    WthrRunCommand(oPC, oTarget, sMsg);
 }

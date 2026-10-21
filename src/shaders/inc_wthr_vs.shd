@@ -1,0 +1,21 @@
+//=============================================================================
+//
+// inc_wthr_vs.shd: NWN-Weathered, the vertex shader shared by vs_weather
+// (with an environment map) and vs_wthr_plain (without).
+//
+//=============================================================================
+
+#include "inc_standard"
+#include "inc_uniforms"
+
+varying float vWeatherHeight;
+varying vec2 vWeatherFacing;
+
+void main ()
+{
+    ApplyStandardShader();
+
+    float fSpan = bboxMax.z - bboxMin.z;
+    vWeatherHeight = fSpan > 0.01 ? clamp((vPos.z - bboxMin.z) / fSpan, 0.0, 1.0) : -1.0;
+    vWeatherFacing = dot(vNormal, vNormal) > 0.0 ? normalize(vNormal).zy : vec2(0.0);
+}

@@ -3,13 +3,35 @@
 // fs_weather.shd: NWN-Weathered
 //
 // The stock lit fragment shader (fslit_sm) with dust and snow added to the
-// surface colour before lighting, so they are lit and shaded like the cloth
-// under them. Used through the generated .mtr materials, one per creature
-// texture; each creature sets its own amounts with
+// surface before lighting, so they are lit and shaded like the cloth under
+// them. Used through the generated .mtr materials, one per creature
+// texture; each creature sets its own values with
 // SetMaterialShaderUniformVec4(oCreature, sMaterial, "DustAmount", x).
 //
-//   DustAmount  0..1  patchy sand-coloured dust, everywhere on the model
-//   SnowAmount  0..1  snow settling on upward-facing surfaces
+//   DustAmount  0..1  dust; climbs from the feet up as it grows
+//   DustSpread  0..1  0 = from the ground up, 1 = all over (dust storm)
+//   SnowAmount  0..1  snow settling on upward-facing surfaces, in clumps
+//                     with a little volume at their edges
+//   BloodWounds 0..1  the creature's own blood, from taking blows
+//   BloodSpatter 0..1 others' blood, from hitting them in melee: hands,
+//                     arms and the front of the body
+//   BloodDry    0..1  fresh to dried (darker, browner)
+//   BloodOwn          own blood colour: 0 none, 1 red, 2 green, 3 yellow,
+//                     4 white
+//   SpatterR/G/B      the spatter's colour, mixed from whoever was hit
+//   PartLow, PartHigh (fixed per texture) where this body part sits on the
+//                     figure, 0 = feet, 1 = top of the head
+//   WoundWeight, SpatterWeight (fixed per texture) how much blood this
+//                     body part catches
+//   SpatterFront      (fixed per texture) how much spatter favours the
+//                     front: 0.75 on creatures, 0 on placeables and doors
+//
+// Blood is hidden for a player whose game has gore turned off: the scripts
+// set scriptableInt16 to 1 for them.
+//
+// Noise comes from the wthr_noise texture in the height-map slot (R coarse
+// blotches, G fine grain, B streaks, A blood droplets), or is computed if
+// that isn't bound.
 //
 //=============================================================================
 
@@ -26,88 +48,4 @@
 #define SELF_ILLUMINATION_MAP 0
 #define ENVIRONMENT_MAP 1
 
-#include "inc_standard"
-
-uniform float DustAmount;
-uniform float SnowAmount;
-
-// Dust and snow colours, in gamma space like a texture.
-#define WEATHER_DUST_COLOR vec3(0.70, 0.60, 0.45)
-#define WEATHER_SNOW_COLOR vec3(0.93, 0.96, 1.00)
-#define WEATHER_NOISE_SCALE 18.0   // patches per texture width
-
-float WeatherHash(vec2 p)
-{
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-
-float WeatherValueNoise(vec2 p)
-{
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = WeatherHash(i);
-    float b = WeatherHash(i + vec2(1.0, 0.0));
-    float c = WeatherHash(i + vec2(0.0, 1.0));
-    float d = WeatherHash(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
-// 0..1 patchiness from the texture coordinates, two octaves, so the
-// pattern sticks to the cloth as the creature moves.
-float WeatherPattern(vec2 uv)
-{
-    vec2 p = uv * WEATHER_NOISE_SCALE;
-    return WeatherValueNoise(p) * 0.65 + WeatherValueNoise(p * 3.7 + 17.0) * 0.35;
-}
-
-// How much a surface faces up, -1..1, in the world (z is up in NWN).
-float WeatherUpness()
-{
-    #if POSITION_VIEW == 1 && VERTEX_NORMAL == 1
-        return (mat3(m_view_inv) * vSurfaceNormal).z;
-    #else
-        return 0.5;
-    #endif
-}
-
-void ApplyWeathering()
-{
-    float fDust = clamp(DustAmount, 0.0, 1.0);
-    float fSnow = clamp(SnowAmount, 0.0, 1.0);
-    if (fDust <= 0.0 && fSnow <= 0.0) return;
-
-    float fPattern = WeatherPattern(vTexCoords.xy);
-
-    // Dust: the amount raises the threshold, so a little dust shows as
-    // scattered patches and a lot covers most of the cloth. It never hides
-    // the cloth completely, and it dulls the colour under it.
-    if (fDust > 0.0)
-    {
-        float fCover = smoothstep(0.0, 0.35, fDust * 1.25 - (1.0 - fPattern));
-        vec3 vDust = ApplyColorSpace(vec4(WEATHER_DUST_COLOR, 1.0)).rgb;
-        float fGrey = dot(FragmentColor.rgb, vec3(0.299, 0.587, 0.114));
-        vec3 vDull = mix(FragmentColor.rgb, vec3(fGrey), 0.35 * fDust);
-        FragmentColor.rgb = mix(vDull, vDust, fCover * 0.7);
-    }
-
-    // Snow: settles where the surface faces up (shoulders, hood, the tops
-    // of boots), more of it as the amount grows; side faces get a dusting.
-    if (fSnow > 0.0)
-    {
-        float fUp = WeatherUpness();
-        float fSettle = smoothstep(0.1, 0.6, fUp) + 0.25 * smoothstep(-0.2, 0.2, fUp);
-        float fCover = smoothstep(0.0, 0.25, fSnow * 1.3 * fSettle - (1.0 - fPattern) * 0.6);
-        vec3 vSnow = ApplyColorSpace(vec4(WEATHER_SNOW_COLOR, 1.0)).rgb;
-        FragmentColor.rgb = mix(FragmentColor.rgb, vSnow, clamp(fCover, 0.0, 1.0));
-    }
-}
-
-void main ()
-{
-    FragmentColor = vec4(1.0);
-    SetupStandardShaderInputs();
-    ApplyWeathering();
-    ApplyStandardShader();
-    gl_FragColor = FragmentColor;
-}
+#include "inc_wthr_fs"

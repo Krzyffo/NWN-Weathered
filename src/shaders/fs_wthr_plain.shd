@@ -1,0 +1,25 @@
+//=============================================================================
+//
+// fs_wthr_plain.shd: NWN-Weathered
+//
+// fs_weather without the environment map, like the stock fslit next to
+// fslit_sm: for placeables and doors whose texture alpha means
+// transparency, not shininess. Everything else is the same; see
+// inc_wthr_fs.
+//
+//=============================================================================
+
+#define SHADER_TYPE 2
+
+#define LIGHTING 1
+#define FOG 1
+#define KEYHOLING 1
+
+#define NORMAL_MAP 0
+#define SPECULAR_MAP 0
+#define ROUGHNESS_MAP 0
+#define HEIGHT_MAP 0
+#define SELF_ILLUMINATION_MAP 0
+#define ENVIRONMENT_MAP 0
+
+#include "inc_wthr_fs"
