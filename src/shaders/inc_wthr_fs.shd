@@ -26,6 +26,7 @@ uniform float PartLow;
 uniform float PartHigh;
 uniform float MeshBase;
 uniform float MeshHeight;
+uniform float PatternSeed;  // 0..1, one per creature: shifts all its patterns
 
 // The noise texture. HEIGHT_MAP is off, so the slot is ours.
 uniform lowp int texture4Bound;
@@ -51,6 +52,13 @@ varying vec3 vWeatherPos;
 #define WEATHER_NOISE_HIGH  0.88   // and 3% above this
 
 // ---- Noise ------------------------------------------------------------------
+
+// Two shifts 0..1 from the creature's PatternSeed, so creatures with the
+// same models don't get their dust, blood and snow in the same spots.
+vec2 WeatherSeed()
+{
+    return vec2(PatternSeed, fract(PatternSeed * 7.31 + 0.17));
+}
 
 float WeatherHash(vec2 p)
 {
@@ -97,7 +105,8 @@ vec2 WeatherDustPattern(vec3 vNoise)
     float fSum = vWeight.x + vWeight.y + vWeight.z;
     if (texture4Bound == 0 || fSum < 0.0001) return vNoise.rb;
     vWeight /= fSum;
-    vec3 p = vWeatherPos * WEATHER_DUST_PER_METRE;
+    vec2 vSeed = WeatherSeed();
+    vec3 p = vWeatherPos * WEATHER_DUST_PER_METRE + vec3(vSeed, fract(vSeed.x * 3.7));
     return texture2D(texUnit4, p.yz).rb * vWeight.x
          + texture2D(texUnit4, p.xz).rb * vWeight.y
          + texture2D(texUnit4, p.xy).rb * vWeight.z;
@@ -236,31 +245,51 @@ void ApplySnow(vec3 vNoise)
 
 // ---- Blood ------------------------------------------------------------------
 
-#define WEATHER_DROPS_PER_METRE 4.0   // the droplet pattern repeats about every 25 cm
+#define WEATHER_DROPS_PER_METRE 4.0   // the droplet texture spans 25 cm (see WeatherBloodSample)
 
 // Blood is placed on the model in 3D, not by its texture layout: creature
 // textures are mostly mirrored (one texture half serves both sides of a
 // chest, one texture both shins), which made every stain symmetrical. The
 // droplet texture is projected onto the model in its standing pose from
 // the side the surface faces most: front/back, left/right or top.
-// Returns (drops, blotch): drops 0 (none) or the drop's order 0.25..1 (a
-// drop shows once the amount is high enough for its order, so more blood
-// brings more drops); blotch 0..1 for the stains of heavy amounts.
-vec2 WeatherBloodSample(vec2 vOffset)
+// Returns (drops, blotch, cluster): drops 0 (none) or the drop's order
+// 0.25..1 (a drop shows once the amount is high enough for its order, so
+// more blood brings more drops); blotch 0..1 for the stains of heavy
+// amounts; cluster 0..1, where blood gathers (see WeatherBloodCover).
+vec3 WeatherBloodSample(vec2 vOffset)
 {
     vec3 vAxis = abs(vWeatherNormal);
     vec2 uv;
     if (vAxis.x >= vAxis.y && vAxis.x >= vAxis.z) uv = vWeatherPos.yz;
     else if (vAxis.y >= vAxis.z)                uv = vWeatherPos.xz;
     else                                         uv = vWeatherPos.xy;
-    uv = uv * WEATHER_DROPS_PER_METRE + vOffset;
+    // The seed shifts by several tiles, so the slow cluster and pick
+    // patterns below move too, not only the drops.
+    uv = uv * WEATHER_DROPS_PER_METRE + vOffset + WeatherSeed() * 7.7;
     if (texture4Bound != 0)
     {
-        vec4 vTexel = texture2D(texUnit4, uv);
-        return vec2(vTexel.a, vTexel.r);
+        // The pattern repeats every 25 cm, which showed on big surfaces: a
+        // cloak's back is two repeats wide, so its halves matched. Two more
+        // copies, turned and scaled by odd amounts (one with smaller drops,
+        // one with bigger), take over in irregular patches some 30 cm
+        // across, picked by the coarse noise, so no two stretches match.
+        // All three are sampled before choosing: choosing the coordinates
+        // first left a blurred seam where the copies meet (the jump
+        // confuses the texture's filtering).
+        vec2 uvSmall = mat2(0.8, 0.6, -0.6, 0.8) * uv * 1.37 + vec2(0.29, 0.71);
+        vec2 uvLarge = mat2(0.28, -0.96, 0.96, 0.28) * uv * 0.62 + vec2(0.83, 0.41);
+        float fPick = texture2D(texUnit4, uv * 0.2 + vec2(0.53, 0.17)).r;
+        vec4 vStraight = texture2D(texUnit4, uv);
+        vec4 vSmall = texture2D(texUnit4, uvSmall);
+        vec4 vLarge = texture2D(texUnit4, uvLarge);
+        vec4 vTexel = fPick < 0.5 ? vStraight : (fPick < 0.65 ? vLarge : vSmall);
+        // Where blood gathers: a slower pattern, about 50 cm across.
+        float fCluster = smoothstep(0.3, 0.75, texture2D(texUnit4, uv * 0.13 + vec2(0.11, 0.47)).r);
+        return vec3(vTexel.a, vTexel.r, fCluster);
     }
     float f = WeatherValueNoise(uv * 25.0);
-    return vec2(f > 0.72 ? 0.25 + 0.75 * (f - 0.72) / 0.28 : 0.0, WeatherValueNoise(uv * 3.0));
+    return vec3(f > 0.72 ? 0.25 + 0.75 * (f - 0.72) / 0.28 : 0.0, WeatherValueNoise(uv * 3.0),
+                WeatherValueNoise(uv * 0.5));
 }
 
 // Gamma-space colour of blood kind 1..4 (red, green, yellow, white).
@@ -278,15 +307,18 @@ vec3 WeatherDried(vec3 vColor, float fDry)
     return mix(vColor, vColor * 0.45 + vec3(0.07, 0.035, 0.01), clamp(fDry, 0.0, 1.0));
 }
 
-// How much of a layer shows here, for an amount 0..1: drops appear in
-// step with the amount, so blood that builds up over an adventure looks
-// like it.
-float WeatherBloodCover(float fAmount, float fDrops, float fBlotch)
+// How much of a layer shows here, for an amount 0..1 (vSample from
+// WeatherBloodSample): drops appear in step with the amount, so blood that
+// builds up over an adventure looks like it. The same amount everywhere
+// looked like wallpaper, so blood gathers: up to 1.6 times as much where
+// the cluster pattern is high, a few drops where it is low, the same
+// overall (measured on wthr_noise).
+float WeatherBloodCover(float fAmount, vec3 vSample)
 {
-    float fShown = clamp(fAmount, 0.0, 1.0);
-    float fDrop = fDrops > 0.0 ? smoothstep(0.0, 0.05, fDrops - (1.0 - fShown * 1.15)) : 0.0;
+    float fHere = clamp(fAmount, 0.0, 1.0) * mix(0.15, 1.6, vSample.z);
+    float fDrop = vSample.x > 0.0 ? smoothstep(0.0, 0.05, vSample.x - (1.0 - fHere * 1.15)) : 0.0;
     // Heavy amounts soak in as stains between the drops.
-    float fStain = smoothstep(0.55, 0.85, fBlotch) * fAmount * 0.7;
+    float fStain = smoothstep(0.55, 0.85, vSample.y) * min(fHere, 1.0) * 0.7;
     return max(fDrop, fStain);
 }
 
@@ -319,8 +351,7 @@ void WeatherBloodSurface(float fCover, vec3 vBlood)
 void ApplySpatter(float fAmount, float fKind, vec2 vOffset, float fWeight)
 {
     if (fAmount <= 0.0) return;
-    vec2 vSample = WeatherBloodSample(vOffset);
-    float fCover = WeatherBloodCover(clamp(fAmount, 0.0, 1.0) * fWeight, vSample.x, vSample.y);
+    float fCover = WeatherBloodCover(clamp(fAmount, 0.0, 1.0) * fWeight, WeatherBloodSample(vOffset));
     vec3 vBlood = ApplyColorSpace(WeatherDried(WeatherBloodColor(fKind), BloodDry));
     FragmentColor.rgb = mix(FragmentColor.rgb, vBlood, fCover * 0.9);
     WeatherBloodSurface(fCover * 0.9, vBlood);
@@ -334,8 +365,7 @@ void ApplyBlood(vec3 vNoise)
     if (BloodWounds > 0.0 && BloodOwn > 0.5)
     {
         float fAmount = clamp(BloodWounds, 0.0, 1.0) * WoundWeight;
-        vec2 vSample = WeatherBloodSample(vec2(0.0));
-        float fCover = WeatherBloodCover(fAmount, vSample.x, vSample.y);
+        float fCover = WeatherBloodCover(fAmount, WeatherBloodSample(vec2(0.0)));
         vec3 vBlood = ApplyColorSpace(WeatherDried(WeatherBloodColor(BloodOwn), BloodDry));
         FragmentColor.rgb = mix(FragmentColor.rgb, vBlood, fCover * 0.9);
         WeatherBloodSurface(fCover * 0.9, vBlood);
@@ -363,7 +393,7 @@ void main ()
     float fSpatter = WeatherSpatterTotal();
     if (DustAmount > 0.0 || SnowAmount > 0.0 || BloodWounds > 0.0 || fSpatter > 0.0)
     {
-        vec3 vNoise = WeatherNoise(vTexCoords.xy);
+        vec3 vNoise = WeatherNoise(vTexCoords.xy + WeatherSeed());
         if (DustAmount > 0.0) ApplyDust(vNoise);
         if (BloodWounds > 0.0 || fSpatter > 0.0) ApplyBlood(vNoise);
         if (SnowAmount > 0.0) ApplySnow(vNoise);

@@ -72,6 +72,7 @@ const string WTHR_VAR_SPAT      = "WTHR_SPAT_";      // + blood kind 1-4: others
 const string WTHR_VAR_DRY       = "WTHR_DRY";        // float: 0 fresh .. 1 dried
 const string WTHR_VAR_SENT      = "WTHR_SENT_";      // + param name: value last sent
 const string WTHR_VAR_MATERIALS = "WTHR_MATERIALS";  // string: materials last sent to
+const string WTHR_VAR_SEED      = "WTHR_SEED";       // float: its pattern seed, 0.0001..1
 const string WTHR_VAR_SEEN      = "WTHR_SEEN";       // int: got its starting look
 const string WTHR_VAR_ZONE      = "WTHR_ZONE";       // object: wthr_zone trigger it is in
 const string WTHR_VAR_FADE      = "WTHR_FADE";       // int: number of the running fade
@@ -100,6 +101,7 @@ const string WTHR_PARAM_SNOW    = "SnowAmount";
 const string WTHR_PARAM_WOUNDS  = "BloodWounds";
 const string WTHR_PARAM_DRY     = "BloodDry";
 const string WTHR_PARAM_OWN     = "BloodOwn";
+const string WTHR_PARAM_SEED    = "PatternSeed";
 
 const string WTHR_BRUSH_TAG = "wthr_brush";
 
@@ -473,6 +475,20 @@ int WthrPush(object oCreature, string sList, string sParam, string sVar, int bFo
     return TRUE;
 }
 
+// The creature's pattern seed, picked at random the first time: it shifts
+// the creature's dust, blood and snow patterns, so creatures with the same
+// models don't get them in the same spots.
+float WthrPatternSeed(object oCreature)
+{
+    float fSeed = GetLocalFloat(oCreature, WTHR_VAR_SEED);
+    if (fSeed <= 0.0)
+    {
+        fSeed = IntToFloat(Random(10000) + 1) / 10000.0;
+        SetLocalFloat(oCreature, WTHR_VAR_SEED, fSeed);
+    }
+    return fSeed;
+}
+
 // Sends the creature's levels to its materials: only those that changed
 // enough to see, or all of them with bForce. bNewLook: work out the
 // materials again (armor changed) and send everything.
@@ -485,7 +501,11 @@ void WthrSend(object oCreature, int bNewLook = FALSE, int bForce = FALSE)
         SetLocalString(oCreature, WTHR_VAR_MATERIALS, sList);
         bForce = TRUE;
     }
-    if (bForce) WthrSendParts(oCreature, sList);
+    if (bForce)
+    {
+        WthrSendParts(oCreature, sList);
+        WthrSetParam(oCreature, sList, WTHR_PARAM_SEED, WthrPatternSeed(oCreature));
+    }
     WthrPush(oCreature, sList, WTHR_PARAM_DUST, WTHR_VAR_DUST, bForce);
     WthrPush(oCreature, sList, WTHR_PARAM_SPREAD, WTHR_VAR_SPREAD, bForce);
     WthrPush(oCreature, sList, WTHR_PARAM_SNOW, WTHR_VAR_SNOW, bForce);

@@ -155,6 +155,7 @@ parameter float SpatterWeight {spatter}
 parameter float SpatterFront {front}
 parameter float MeshBase {base}
 parameter float MeshHeight {height}
+parameter float PatternSeed 0.0
 """
 
 # The clothes brush: a small misc item ("Rags" look) with Unique Power Self
