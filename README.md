@@ -2,11 +2,11 @@
 
 Dust, snow and blood on characters, monsters, placeables and doors in Neverwinter Nights: Enhanced Edition, one at a time.
 
-- **Dust** builds up from the ground: boots first, then the legs, past the waist when heavy. In a dust storm it settles over the whole body.
+- **Dust** builds up from the ground: boots first, then the legs, past the waist when heavy. In a dust storm it settles over the whole body. It comes in patches and never covers everything: at full dust about 80% of the surface near the ground, thinning to about 60% where it reaches highest. Like blood, the patches are placed on the model in 3D rather than by its (mostly mirrored) texture, and the left and right halves of the body get different patterns.
 - **Snow** settles in matte clumps where surfaces face up (shoulders, hoods, the tops of boots).
 - **Blood** from fighting: blows leave a creature's own blood on it, and melee attackers get their victims' blood on their hands, arms and front, in each victim's colour. Blood dries darker over a few minutes.
 - **Gradual:** dust and snow come and go step by step, blood builds up hit by hit, and a noise texture breaks everything into natural patches.
-- **Cloaks** take dust, snow and blood like the rest of the creature: the hem gets dusty with the shins. Helmets can't (see [Limits](#limits)).
+- **Cloaks** take dust, snow and blood like the rest of the creature: the hem gets dusty with the shins. Helmets, robes and weapons can't (see [Limits](#limits)).
 - **Per creature, in multiplayer:** the look belongs to the creature, so every player sees the same dusty traveller.
 - **Designer-controlled:** nothing is detected from tilesets. You decide where dust and snow build up, what the weather does, and how the area's own creatures start out.
 
@@ -187,7 +187,7 @@ If shader errors show, they're in `logs/nwclientLog1.txt` in your NWN user folde
 
 ## How it works
 
-NWN:EE gives a texture a material when a `.mtr` file of the same name exists. The hak has one material for each creature texture in the base game, cloaks included, 2,069 in all, using `vs_weather` and `fs_weather`. These are the stock lit shaders plus dust, snow and blood blended in before lighting, so they're shaded like the cloth under them. Each material carries:
+NWN:EE gives a texture a material when a `.mtr` file of the same name exists. The hak has one material for each creature texture in the base game, cloaks included, 2,047 in all, using `vs_weather` and `fs_weather`. These are the stock lit shaders plus dust, snow and blood blended in before lighting, so they're shaded like the cloth under them. Each material carries:
 
 - **The noise texture** in the shader's unused height-map slot.
 - **A height range for its body part** (feet low, head high), so dust can climb. The build bakes in a default, and for player-shaped creatures the scripts send each material the range of the parts it's actually on for that creature, from `wthr_parts.2da`: one texture can dress a thigh in one armour and a shoulder pad in another, and with only the baked-in shoulder range those thighs stayed clean until dust reached the shoulders.
@@ -220,7 +220,7 @@ It reads the game's models (about half a minute) and writes `nwn_weathered.hak` 
 
 ## Limits
 
-- **Helmets stay clean.** The game does draw a helmet with a material of the same name, but it never passes a creature's material values on to its helmet. `SetMaterialShaderUniformVec4` reaches the body, head and cloak, but not the helmet, whether it's called on the creature or on the helmet item. In a test, a helmet drawn through a test shader kept its default values after a script set new ones. The other ways to change a texture don't fit: `ReplaceObjectTexture` can't take PLT textures, which every helmet uses, and `SetTextureOverride` changes a texture on every creature a player sees, not just one. So the hak has no helmet materials, and helmets keep the game's own shader. If a later NWN:EE version passes material values on to helmets, as 1.88 did for cloaks, they can be added back.
+- **Helmets, robes and weapons stay clean.** The game does draw them with a material of the same name, but it never passes a creature's material values on to their models. `SetMaterialShaderUniformVec4` reaches the body, head and cloak, but not these, whether it's called on the creature or on the item. In tests, a helmet, a robe and a greatsword drawn through a test shader kept their default values after a script set new ones (on the greatsword, set both on the creature and on the weapon item). The other ways to change a texture don't fit: `ReplaceObjectTexture` can't take PLT textures, which helmets and robes use, and `SetTextureOverride` changes a texture on every creature a player sees, not just one. So the hak has no materials for them, and they keep the game's own shader. A robe texture that another body part also uses (some robes wear `pmh0_pelvis001`) keeps its material for that part, and it shows nothing on the robe. If a later NWN:EE version passes material values on to these models, as 1.88 did for cloaks, they can be added back.
 - Only base-game creatures, placeables and doors are covered. Custom content from other haks (CEP and similar) needs its textures added to the tables.
 - Textures that already ship with a material keep it: the two old-style heads, `oldf_head` and `oldm_head`.
 - The materials replace the engine's default shader for these textures with the standard lit one, so EE's optional normal-mapped texture packs lose their normal maps on creatures.

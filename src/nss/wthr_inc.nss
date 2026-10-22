@@ -215,8 +215,9 @@ object WthrShownCloak(object oCreature)
 }
 
 // The textures on one part of a part-based creature (a wthr_* 2DA cell,
-// "" for none): a body part 0-18, the head or the cloak. Helmets have none:
-// the engine doesn't pass a creature's material values on to its helmet.
+// "" for none): a body part 0-17, the head or the cloak. Helmets, robes
+// and weapons have none: the engine doesn't pass a creature's material
+// values on to their models.
 // oArmor: its armor, sPrefix: WthrPartPrefix.
 string WthrPartTextures(object oCreature, object oArmor, string sPrefix, int nPart)
 {
@@ -228,12 +229,12 @@ string WthrPartTextures(object oCreature, object oArmor, string sPrefix, int nPa
         if (!GetIsObjectValid(oCloak)) return "";
         return Get2DAString("wthr_cloak", "TEXTURES", GetItemAppearance(oCloak, ITEM_APPR_TYPE_SIMPLE_MODEL, 0));
     }
-    if (nPart > 18) return "";
+    if (nPart > 17) return "";  // 18 is the robe
     // Armor decides each part it has a model for; the body shows through elsewhere.
     int nModel = 0;
     if (GetIsObjectValid(oArmor))
         nModel = GetItemAppearance(oArmor, ITEM_APPR_TYPE_ARMOR_MODEL, nPart);
-    if (nModel <= 0 && nPart != 18)
+    if (nModel <= 0)
         nModel = GetCreatureBodyPart(nPart, oCreature);
     if (nModel <= 0) return "";
     return Get2DAString("wthr_" + WthrPartName(nPart), sPrefix, nModel);

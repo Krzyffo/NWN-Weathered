@@ -62,9 +62,11 @@ PARTS = ["footr", "footl", "shinr", "shinl", "legl", "legr", "pelvis", "chest", 
          "forer", "forel", "bicepr", "bicepl", "shor", "shol", "handr", "handl", "robe", "head"]
 PART_MODEL = re.compile(r"^(p[mf][a-z]\d+)_(" + "|".join(PARTS) + r")(\d{3})$")
 # Cloaks are items with models of their own, <prefix>_cloak_NNN; their row
-# in wthr_parts.2da follows the body parts and the head (20). Helmets get
-# no material: the engine doesn't pass a creature's material values on to
-# its helmet (nor takes them from the helmet item), so they couldn't change.
+# in wthr_parts.2da follows the body parts and the head (20). Helmets,
+# robes and weapons get no material: the engine doesn't pass a creature's
+# material values on to their models (nor takes them from the item), so
+# they couldn't change. A robe texture another body part uses too (some
+# robes wear pmh0_pelvis001) still gets one, for that part.
 CLOAK = "cloak"
 CLOAK_MODEL = re.compile(r"^(p[mf][a-z]\d+)_cloak_(\d{3})$")
 SKELETON_MODEL = re.compile(r"^p[mf][a-z]\d+$")
@@ -417,6 +419,8 @@ def build_tables(textures, models, game_tables):
         if not m:
             continue
         prefix, part, number = m.group(1), m.group(2), int(m.group(3))
+        if part == "robe":
+            continue  # no materials for robes (see CLOAK above)
         tex = model_textures(nwn_key.read_bif_resource(*loc), textures)
         if tex:
             parts[part].setdefault(prefix, {})[number] = tex
@@ -425,6 +429,8 @@ def build_tables(textures, models, game_tables):
 
     tables = {}
     for part, by_prefix in parts.items():
+        if not by_prefix:
+            continue  # the robes
         prefixes = sorted(by_prefix)
         last = max((n for d in by_prefix.values() for n in d), default=0)
         lines = ["2DA V2.0", "", "    " + " ".join(prefixes)]

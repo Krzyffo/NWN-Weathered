@@ -20,4 +20,11 @@ void main ()
     vWeatherHeight = fSpan > 0.01 ? clamp((vPos.z - bboxMin.z) / fSpan, 0.0, 1.0) : -1.0;
     vWeatherNormal = dot(vNormal, vNormal) > 0.0 ? normalize(vNormal) : vec3(0.0);
     vWeatherPos = vPos.xyz;
+    // Left and right body parts are mirror copies (the box leans the other
+    // way along x), so patterns placed by position came out mirrored too.
+    // Shift each side's pattern by a different amount; not along z, which
+    // a cloak's height is read from.
+    float fCentre = bboxMin.x + bboxMax.x;
+    if (fSpan > 0.01 && abs(fCentre) > 0.001)
+        vWeatherPos.xy += sign(fCentre) * vec2(0.37, 0.53);
 }
