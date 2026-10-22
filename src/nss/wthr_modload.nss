@@ -7,6 +7,8 @@
 //   OnPlayerEquipItem    wthr_equip     keep the look across armor changes
 //   OnPlayerUnEquipItem  wthr_equip
 //   OnPlayerRest         wthr_rest      resting cleans up
+// and on every area:
+//   OnEnter              wthr_areaenter creatures get their look as they appear
 //
 // Set it as the module's OnModuleLoad, or, if the module already has one,
 // add this line to that script:
@@ -26,4 +28,5 @@ void main()
     WthrHookEvent(EVENT_SCRIPT_MODULE_ON_EQUIP_ITEM, "wthr_equip");
     WthrHookEvent(EVENT_SCRIPT_MODULE_ON_UNEQUIP_ITEM, "wthr_equip");
     WthrHookEvent(EVENT_SCRIPT_MODULE_ON_PLAYER_REST, "wthr_rest");
+    WthrHookAreas();
 }

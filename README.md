@@ -31,8 +31,9 @@ Status: dust and snow work in game, including movement. Blood is new and unteste
    | OnPlayerTarget | `wthr_target` | A DM picking a creature for a test command |
    | OnPlayerEquipItem / OnPlayerUnEquipItem | `wthr_equip` | Keeps the look across armour changes |
    | OnPlayerRest | `wthr_rest` | Resting cleans up |
+   | Every area's OnEnter | `wthr_areaenter` | Creatures get their starting look and blood the moment they appear (placed, spawned, summoned or walking in) |
 
-   NPCs and monsters get `wthr_damaged` on their own OnDamaged event when a player first comes near; their own OnDamaged script still runs first.
+   Each area's own OnEnter script, and each creature's own OnDamaged script, still runs first. NPCs and monsters get `wthr_damaged` on their OnDamaged when they get their starting look.
 
    Leave those events as they are; don't also call our scripts from the module's own ones.
 5. Mark where dust and snow build up (next section). Then Build Module and save.

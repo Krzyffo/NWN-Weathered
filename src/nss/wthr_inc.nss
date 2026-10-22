@@ -842,19 +842,17 @@ void WthrResend(object oCreature)
     if (GetIsObjectValid(oCreature)) WthrSend(oCreature, FALSE, TRUE);
 }
 
-const float WTHR_SCAN_RANGE = 40.0;  // the regular sweep for new spawns
-const float WTHR_SCAN_GAP   = 0.1;   // seconds between creatures, to spread the work
+const float WTHR_SCAN_GAP = 0.1;  // seconds between creatures, to spread the work
 
-// bWholeArea (the player just arrived): every creature in the area gets its
-// starting look, and the ones already dusty, snowy or bloody are sent again
-// so the newcomer sees them. Otherwise only new creatures near the player.
-void WthrScanArea(object oPC, int bWholeArea)
+// A player just arrived: every creature in the area that hasn't got its
+// starting look gets it (the ones placed in the toolset), and the ones
+// already dusty, snowy or bloody are sent again so the newcomer sees them.
+// Creatures that appear later get theirs from wthr_areaenter.
+void WthrScanArea(object oPC)
 {
     object oArea = GetArea(oPC);
-    location lHere = GetLocation(oPC);
     float fDelay = 0.0;
-    object o = bWholeArea ? GetFirstObjectInArea(oArea, OBJECT_TYPE_CREATURE)
-                          : GetFirstObjectInShape(SHAPE_SPHERE, WTHR_SCAN_RANGE, lHere, FALSE, OBJECT_TYPE_CREATURE);
+    object o = GetFirstObjectInArea(oArea, OBJECT_TYPE_CREATURE);
     while (GetIsObjectValid(o))
     {
         if (!GetLocalInt(o, WTHR_VAR_SEEN) && !WthrIsPartyMember(o))
@@ -862,15 +860,13 @@ void WthrScanArea(object oPC, int bWholeArea)
             DelayCommand(fDelay, WthrStartLook(o, oArea));
             fDelay += WTHR_SCAN_GAP;
         }
-        else if (bWholeArea && o != oPC && WthrHasAny(o))
+        else if (o != oPC && WthrHasAny(o))
         {
             DelayCommand(fDelay, WthrResend(o));
             fDelay += WTHR_SCAN_GAP;
         }
-        o = bWholeArea ? GetNextObjectInArea(oArea, OBJECT_TYPE_CREATURE)
-                       : GetNextObjectInShape(SHAPE_SPHERE, WTHR_SCAN_RANGE, lHere, FALSE, OBJECT_TYPE_CREATURE);
+        o = GetNextObjectInArea(oArea, OBJECT_TYPE_CREATURE);
     }
-    if (!bWholeArea) return;
 
     // Placeables and doors with a look: shown the first time, sent again
     // for each player who arrives later.
@@ -899,7 +895,6 @@ const string WTHR_VAR_TICKS    = "WTHR_TICKS";     // int: updates so far
 
 const float WTHR_TICK         = 2.0;   // seconds between updates
 const float WTHR_MOVED        = 1.0;   // metres per update that count as travelling
-const int   WTHR_SWEEP_TICKS  = 3;     // players sweep for new spawns every 6 s
 const int   WTHR_GORE_TICKS   = 5;     // and check their gore setting every 10 s
 const int   WTHR_MAX_HENCHMEN = 10;
 
@@ -926,8 +921,8 @@ void WthrWeatherAssociates(object oPC, object oArea, int bMoving, float fMinutes
 
 const float WTHR_FIGHT_RANGE = 20.0;  // metres: creatures this close may be fighting the player
 
-// Gets a creature ready for blood the moment it fights a player, instead
-// of waiting for the next sweep.
+// Gets a creature ready for blood the moment it fights a player, if it
+// somehow wasn't already (wthr_areaenter sets up creatures as they appear).
 void WthrReadyForBlood(object oCreature)
 {
     if (GetObjectType(oCreature) != OBJECT_TYPE_CREATURE || GetIsPC(oCreature)) return;
@@ -937,10 +932,10 @@ void WthrReadyForBlood(object oCreature)
         WthrHookDamage(oCreature);
 }
 
-// Each update gets the creatures fighting a player ready for blood right
-// away (whoever the player attacks, and everyone nearby attacking them),
-// instead of waiting for the next sweep: a monster that spawns and charges
-// bleeds from its first blow.
+// Each update makes sure the creatures fighting a player are ready for
+// blood (whoever the player attacks, and everyone nearby attacking them): a
+// safety net behind wthr_areaenter, e.g. for an area created by a script
+// after the module loaded, which wthr_modload never hooked.
 void WthrWatchFight(object oPC)
 {
     WthrReadyForBlood(GetAttackTarget(oPC));
@@ -983,10 +978,9 @@ void WthrTick(object oCreature, int nGen)
     if (oArea != GetLocalObject(oCreature, WTHR_VAR_AREA))
     {
         SetLocalObject(oCreature, WTHR_VAR_AREA, oArea);
-        if (bPC) WthrScanArea(oCreature, TRUE);
+        if (bPC) WthrScanArea(oCreature);
         return;  // arriving is not travelling
     }
-    if (bPC && nTicks % WTHR_SWEEP_TICKS == 0) WthrScanArea(oCreature, FALSE);
 
     int bMoving = GetAreaFromLocation(lLast) == oArea
                   && GetDistanceBetweenLocations(lHere, lLast) >= WTHR_MOVED;
@@ -1044,6 +1038,25 @@ void WthrRunOriginal(int nEvent)
     SetLocalInt(oModule, sBusy, TRUE);
     ExecuteScript(sScript, OBJECT_SELF);
     DeleteLocalInt(oModule, sBusy);
+}
+
+const string WTHR_VAR_ORIG_AREA_ENTER = "WTHR_ORIG_AREA_ENTER";  // string on an area: its own OnEnter
+
+// Puts wthr_areaenter on every area's OnEnter, keeping each area's own
+// script: creatures get their starting look the moment they appear.
+void WthrHookAreas()
+{
+    object oArea = GetFirstArea();
+    while (GetIsObjectValid(oArea))
+    {
+        string sOwn = GetEventScript(oArea, EVENT_SCRIPT_AREA_ON_ENTER);
+        if (sOwn != "wthr_areaenter")
+        {
+            SetLocalString(oArea, WTHR_VAR_ORIG_AREA_ENTER, sOwn);
+            SetEventScript(oArea, EVENT_SCRIPT_AREA_ON_ENTER, "wthr_areaenter");
+        }
+        oArea = GetNextArea();
+    }
 }
 
 // Puts sOurs on a module event, keeping the current script as the original.
