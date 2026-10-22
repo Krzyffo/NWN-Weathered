@@ -24,6 +24,8 @@ uniform float SpatterWeight;
 uniform float SpatterFront;
 uniform float PartLow;
 uniform float PartHigh;
+uniform float MeshBase;
+uniform float MeshHeight;
 
 // The noise texture. HEIGHT_MAP is off, so the slot is ours.
 uniform lowp int texture4Bound;
@@ -84,6 +86,9 @@ vec3 WeatherNoise(vec2 uv)
 // 0 at the feet, 1 at the top of the head.
 float WeatherBodyHeight()
 {
+    // Cloaks are skin meshes, which get no bounding box: the material says
+    // where the mesh hangs on the figure instead (see tools/build.py).
+    if (MeshHeight > 0.0) return clamp((MeshBase + vWeatherPos.z) / MeshHeight, 0.0, 1.0);
     float fLocal = vWeatherHeight < 0.0 ? 0.5 : vWeatherHeight;
     return mix(PartLow, PartHigh, fLocal);
 }

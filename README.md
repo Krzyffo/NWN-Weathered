@@ -6,6 +6,7 @@ Dust, snow and blood on characters, monsters, placeables and doors in Neverwinte
 - **Snow** settles in matte clumps where surfaces face up (shoulders, hoods, the tops of boots).
 - **Blood** from fighting: blows leave a creature's own blood on it, and melee attackers get their victims' blood on their hands, arms and front, in each victim's colour. Blood dries darker over a few minutes.
 - **Gradual:** dust and snow come and go step by step, blood builds up hit by hit, and a noise texture breaks everything into natural patches.
+- **Cloaks** take dust, snow and blood like the rest of the creature: the hem gets dusty with the shins. Helmets can't (see [Limits](#limits)).
 - **Per creature, in multiplayer:** the look belongs to the creature, so every player sees the same dusty traveller.
 - **Designer-controlled:** nothing is detected from tilesets. You decide where dust and snow build up, what the weather does, and how the area's own creatures start out.
 
@@ -29,7 +30,7 @@ Status: dust and snow work in game, including movement. Blood is new and unteste
    | OnPlayerChat | `wthr_chat` | `/dirt`, `/brush` and the test commands |
    | OnActivateItem | `wthr_activate` | The clothes brush |
    | OnPlayerTarget | `wthr_target` | A DM picking a creature for a test command |
-   | OnPlayerEquipItem / OnPlayerUnEquipItem | `wthr_equip` | Keeps the look across armour changes |
+   | OnPlayerEquipItem / OnPlayerUnEquipItem | `wthr_equip` | Keeps the look across armour and cloak changes |
    | OnPlayerRest | `wthr_rest` | Resting cleans up |
    | Every area's OnEnter | `wthr_areaenter` | Creatures get their starting look and blood the moment they appear (placed, spawned, summoned or walking in) |
 
@@ -186,18 +187,21 @@ If shader errors show, they're in `logs/nwclientLog1.txt` in your NWN user folde
 
 ## How it works
 
-NWN:EE gives a texture a material when a `.mtr` file of the same name exists. The hak has one material for each creature texture in the base game, 2,054 in all, using `vs_weather` and `fs_weather`. These are the stock lit shaders plus dust, snow and blood blended in before lighting, so they're shaded like the cloth under them. Each material carries:
+NWN:EE gives a texture a material when a `.mtr` file of the same name exists. The hak has one material for each creature texture in the base game, cloaks included, 2,069 in all, using `vs_weather` and `fs_weather`. These are the stock lit shaders plus dust, snow and blood blended in before lighting, so they're shaded like the cloth under them. Each material carries:
 
 - **The noise texture** in the shader's unused height-map slot.
-- **A height range for its body part** (feet low, head high), which the build bakes in so dust can climb.
-- **How much blood its body part catches:** wounds anywhere, spatter on hands and arms first.
+- **A height range for its body part** (feet low, head high), so dust can climb. The build bakes in a default, and for player-shaped creatures the scripts send each material the range of the parts it's actually on for that creature, from `wthr_parts.2da`: one texture can dress a thigh in one armour and a shoulder pad in another, and with only the baked-in shoulder range those thighs stayed clean until dust reached the shoulders.
+- **How much blood its body part catches:** wounds anywhere, spatter on hands and arms first. Sent per creature the same way.
+- **Where a cloak hangs**, for cloaks only. A cloak is a skin mesh, which the engine gives no bounding box, so its height on the figure comes from the cloak model and the race's skeleton, per race, gender and phenotype.
 - **Values a script sets on one creature**, via `SetMaterialShaderUniformVec4`: `DustAmount`, `DustSpread`, `SnowAmount`, `BloodWounds`, `BloodDry`, `BloodOwn` (its blood colour) and `SpatterRed`, `SpatterGreen`, `SpatterYellow`, `SpatterWhite` (others' blood, one layer per colour). Only the values that changed are sent, and blood from a fight is bundled into one send per second.
 
 Gore is a per-player switch: the scripts set a global shader value (`scriptableInt16`) for each player from their gore setting, and the shader skips blood for that player.
 
-Scripts need a creature's texture names for that call, and those don't follow from the model names (an elf's `pelvis003` is textured with `pfh0_pelvis001`). So `tools/build.py` reads every player body-part, monster, placeable and door model in the game and writes lookup tables into the hak:
+Scripts need a creature's texture names for that call, and those don't follow from the model names (an elf's `pelvis003` is textured with `pfh0_pelvis001`). So `tools/build.py` reads every player body-part, cloak, monster, placeable and door model in the game and writes lookup tables into the hak:
 
 - `wthr_<part>.2da` per body part;
+- `wthr_cloak.2da` for cloaks. A cloak's texture is `cloak_NNN` from the TEXTURE column of `cloakmodel.2da`, which replaces the cloak model's own;
+- `wthr_parts.2da`: each part's height range and blood weights, for the scripts;
 - `wthr_appear.2da` for monsters;
 - `wthr_plc.2da`, `wthr_door.2da` and `wthr_gdoor.2da` for placeables, tileset doors and generic doors.
 
@@ -216,6 +220,7 @@ It reads the game's models (about half a minute) and writes `nwn_weathered.hak` 
 
 ## Limits
 
+- **Helmets stay clean.** The game does draw a helmet with a material of the same name, but it never passes a creature's material values on to its helmet. `SetMaterialShaderUniformVec4` reaches the body, head and cloak, but not the helmet, whether it's called on the creature or on the helmet item. In a test, a helmet drawn through a test shader kept its default values after a script set new ones. The other ways to change a texture don't fit: `ReplaceObjectTexture` can't take PLT textures, which every helmet uses, and `SetTextureOverride` changes a texture on every creature a player sees, not just one. So the hak has no helmet materials, and helmets keep the game's own shader. If a later NWN:EE version passes material values on to helmets, as 1.88 did for cloaks, they can be added back.
 - Only base-game creatures, placeables and doors are covered. Custom content from other haks (CEP and similar) needs its textures added to the tables.
 - Textures that already ship with a material keep it: the two old-style heads, `oldf_head` and `oldm_head`.
 - The materials replace the engine's default shader for these textures with the standard lit one, so EE's optional normal-mapped texture packs lose their normal maps on creatures.

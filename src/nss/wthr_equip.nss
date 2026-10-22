@@ -1,15 +1,16 @@
 // wthr_equip: module OnPlayerEquipItem and OnPlayerUnEquipItem (set by
 // wthr_modload, or add this line to the module's own scripts there:
 //     ExecuteScript("wthr_equip", OBJECT_SELF);
-// New armor brings new textures, so the creature's dust and snow are sent
-// to its new materials. The delay lets the new look settle first.
+// New armor or a cloak brings new textures, so the creature's
+// dust, snow and blood are sent to its new materials. The delay lets the
+// new look settle first.
 
 #include "wthr_inc"
 
 void WthrRefreshLater(object oCreature)
 {
     if (!GetIsObjectValid(oCreature)) return;
-    if (GetLocalFloat(oCreature, WTHR_VAR_DUST) <= 0.0 && GetLocalFloat(oCreature, WTHR_VAR_SNOW) <= 0.0) return;
+    if (!WthrHasAny(oCreature)) return;
     DelayCommand(0.5, WthrRefresh(oCreature));
 }
 

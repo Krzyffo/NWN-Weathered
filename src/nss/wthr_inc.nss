@@ -117,7 +117,8 @@ const float WTHR_STANDING                 = 0.25;  // share of the dust rate whi
 const float WTHR_STORM_RISE               = 0.25;  // per minute: dust spreads over the body in a storm
 const float WTHR_SEND_STEP                = 0.02;  // smaller changes wait; each send is network traffic
 
-const int WTHR_PART_HEAD = 20;  // CREATURE_PART_HEAD
+const int WTHR_PART_HEAD  = 20;  // CREATURE_PART_HEAD
+const int WTHR_PART_CLOAK = 21;  // the row of wthr_parts.2da after the head
 
 // ---- Materials -------------------------------------------------------------
 
@@ -200,33 +201,59 @@ int WthrIsObject(object o)
     return nType == OBJECT_TYPE_PLACEABLE || nType == OBJECT_TYPE_DOOR;
 }
 
+int WthrIsPartBased(object oCreature)
+{
+    return GetStringUpperCase(Get2DAString("appearance", "MODELTYPE", GetAppearanceType(oCreature))) == "P";
+}
+
+// The equipped cloak if it shows.
+object WthrShownCloak(object oCreature)
+{
+    object oCloak = GetItemInSlot(INVENTORY_SLOT_CLOAK, oCreature);
+    if (GetIsObjectValid(oCloak) && !GetHiddenWhenEquipped(oCloak)) return oCloak;
+    return OBJECT_INVALID;
+}
+
+// The textures on one part of a part-based creature (a wthr_* 2DA cell,
+// "" for none): a body part 0-18, the head or the cloak. Helmets have none:
+// the engine doesn't pass a creature's material values on to its helmet.
+// oArmor: its armor, sPrefix: WthrPartPrefix.
+string WthrPartTextures(object oCreature, object oArmor, string sPrefix, int nPart)
+{
+    if (nPart == WTHR_PART_HEAD)
+        return Get2DAString("wthr_head", sPrefix, GetCreatureBodyPart(WTHR_PART_HEAD, oCreature));
+    if (nPart == WTHR_PART_CLOAK)
+    {
+        object oCloak = WthrShownCloak(oCreature);
+        if (!GetIsObjectValid(oCloak)) return "";
+        return Get2DAString("wthr_cloak", "TEXTURES", GetItemAppearance(oCloak, ITEM_APPR_TYPE_SIMPLE_MODEL, 0));
+    }
+    if (nPart > 18) return "";
+    // Armor decides each part it has a model for; the body shows through elsewhere.
+    int nModel = 0;
+    if (GetIsObjectValid(oArmor))
+        nModel = GetItemAppearance(oArmor, ITEM_APPR_TYPE_ARMOR_MODEL, nPart);
+    if (nModel <= 0 && nPart != 18)
+        nModel = GetCreatureBodyPart(nPart, oCreature);
+    if (nModel <= 0) return "";
+    return Get2DAString("wthr_" + WthrPartName(nPart), sPrefix, nModel);
+}
+
 // The textures (= material names) the creature or object shows right now,
 // as a ";"-wrapped list: ";pmh0_chest001;pmh0_pelvis001;".
 string WthrMaterials(object oCreature)
 {
     if (WthrIsObject(oCreature))
         return WthrAddNames(";", WthrObjectTextures(oCreature));
-    int nAppearance = GetAppearanceType(oCreature);
     string sList = ";";
-    if (GetStringUpperCase(Get2DAString("appearance", "MODELTYPE", nAppearance)) != "P")
-        return WthrAddNames(sList, Get2DAString("wthr_appear", "TEXTURES", nAppearance));
+    if (!WthrIsPartBased(oCreature))
+        return WthrAddNames(sList, Get2DAString("wthr_appear", "TEXTURES", GetAppearanceType(oCreature)));
 
     string sPrefix = WthrPartPrefix(oCreature);
     object oArmor = GetItemInSlot(INVENTORY_SLOT_CHEST, oCreature);
     int nPart;
-    for (nPart = 0; nPart <= 18; nPart++)
-    {
-        // Armor decides each part it has a model for; the body shows through elsewhere.
-        int nModel = 0;
-        if (GetIsObjectValid(oArmor))
-            nModel = GetItemAppearance(oArmor, ITEM_APPR_TYPE_ARMOR_MODEL, nPart);
-        if (nModel <= 0 && nPart != 18)
-            nModel = GetCreatureBodyPart(nPart, oCreature);
-        if (nModel > 0)
-            sList = WthrAddNames(sList, Get2DAString("wthr_" + WthrPartName(nPart), sPrefix, nModel));
-    }
-    int nHead = GetCreatureBodyPart(WTHR_PART_HEAD, oCreature);
-    sList = WthrAddNames(sList, Get2DAString("wthr_head", sPrefix, nHead));
+    for (nPart = 0; nPart <= WTHR_PART_CLOAK; nPart++)
+        sList = WthrAddNames(sList, WthrPartTextures(oCreature, oArmor, sPrefix, nPart));
     return sList;
 }
 
@@ -240,6 +267,115 @@ void WthrSetParam(object oCreature, string sList, string sParam, float fValue)
         string sMaterial = GetSubString(sList, nStart, nSep - nStart);
         if (sMaterial != "")
             SetMaterialShaderUniformVec4(oCreature, sMaterial, sParam, fValue);
+        nStart = nSep + 1;
+        nSep = FindSubString(sList, ";", nStart);
+    }
+}
+
+// ---- Part values, per creature ----------------------------------------------
+
+// Scratch locals while WthrSendParts runs, + material name.
+const string WTHR_VAR_PART      = "WTHR_PART_";
+const string WTHR_VAR_PART_LOW  = "WTHR_PART_LOW_";
+const string WTHR_VAR_PART_HIGH = "WTHR_PART_HIGH_";
+const string WTHR_VAR_PART_WND  = "WTHR_PART_WND_";
+const string WTHR_VAR_PART_SPT  = "WTHR_PART_SPT_";
+const string WTHR_VAR_PART_MESH = "WTHR_PART_MESH_";
+
+float WthrMin(float a, float b)
+{
+    return a < b ? a : b;
+}
+
+float WthrMax(float a, float b)
+{
+    return a > b ? a : b;
+}
+
+// Notes that the materials in sCell are on part nPart (a wthr_parts.2da
+// row); sMesh: where a cloak hangs, "MeshBase_MeshHeight".
+void WthrPartNote(object oCreature, string sCell, int nPart, string sMesh)
+{
+    float fLow = StringToFloat(Get2DAString("wthr_parts", "LOW", nPart));
+    float fHigh = StringToFloat(Get2DAString("wthr_parts", "HIGH", nPart));
+    float fWounds = StringToFloat(Get2DAString("wthr_parts", "WOUNDS", nPart));
+    float fSpatter = StringToFloat(Get2DAString("wthr_parts", "SPATTER", nPart));
+    sCell += ";";
+    int nStart = 0;
+    int nSep = FindSubString(sCell, ";", nStart);
+    while (nSep >= 0)
+    {
+        string s = GetSubString(sCell, nStart, nSep - nStart);
+        if (s != "" && !GetLocalInt(oCreature, WTHR_VAR_PART + s))
+        {
+            SetLocalInt(oCreature, WTHR_VAR_PART + s, TRUE);
+            SetLocalFloat(oCreature, WTHR_VAR_PART_LOW + s, fLow);
+            SetLocalFloat(oCreature, WTHR_VAR_PART_HIGH + s, fHigh);
+            SetLocalFloat(oCreature, WTHR_VAR_PART_WND + s, fWounds);
+            SetLocalFloat(oCreature, WTHR_VAR_PART_SPT + s, fSpatter);
+        }
+        else if (s != "")
+        {
+            SetLocalFloat(oCreature, WTHR_VAR_PART_LOW + s, WthrMin(fLow, GetLocalFloat(oCreature, WTHR_VAR_PART_LOW + s)));
+            SetLocalFloat(oCreature, WTHR_VAR_PART_HIGH + s, WthrMax(fHigh, GetLocalFloat(oCreature, WTHR_VAR_PART_HIGH + s)));
+            SetLocalFloat(oCreature, WTHR_VAR_PART_WND + s, WthrMax(fWounds, GetLocalFloat(oCreature, WTHR_VAR_PART_WND + s)));
+            SetLocalFloat(oCreature, WTHR_VAR_PART_SPT + s, WthrMax(fSpatter, GetLocalFloat(oCreature, WTHR_VAR_PART_SPT + s)));
+        }
+        if (s != "" && sMesh != "") SetLocalString(oCreature, WTHR_VAR_PART_MESH + s, sMesh);
+        nStart = nSep + 1;
+        nSep = FindSubString(sCell, ";", nStart);
+    }
+}
+
+// One texture can be on several parts: both thighs, a thigh and a shoulder
+// pad in some armour, the default male pelvis and some robes. Its material
+// has the build's values for only one of those parts, which made such
+// thighs gather dust only as it reached the shoulders. So a part-based
+// creature's materials get the heights they cover on this creature (all
+// their parts together) and the most blood any of those parts catches;
+// a cloak gets where it hangs on this race's figure.
+void WthrSendParts(object oCreature, string sList)
+{
+    if (WthrIsObject(oCreature) || !WthrIsPartBased(oCreature)) return;
+    string sPrefix = WthrPartPrefix(oCreature);
+    object oArmor = GetItemInSlot(INVENTORY_SLOT_CHEST, oCreature);
+    int nPart;
+    for (nPart = 0; nPart <= WTHR_PART_CLOAK; nPart++)
+    {
+        string sCell = WthrPartTextures(oCreature, oArmor, sPrefix, nPart);
+        if (sCell == "") continue;
+        string sMesh = "";
+        if (nPart == WTHR_PART_CLOAK)
+            sMesh = Get2DAString("wthr_cloak", sPrefix,
+                GetItemAppearance(WthrShownCloak(oCreature), ITEM_APPR_TYPE_SIMPLE_MODEL, 0));
+        WthrPartNote(oCreature, sCell, nPart, sMesh);
+    }
+
+    int nStart = 1;
+    int nSep = FindSubString(sList, ";", nStart);
+    while (nSep >= 0)
+    {
+        string s = GetSubString(sList, nStart, nSep - nStart);
+        if (s != "" && GetLocalInt(oCreature, WTHR_VAR_PART + s))
+        {
+            SetMaterialShaderUniformVec4(oCreature, s, "PartLow", GetLocalFloat(oCreature, WTHR_VAR_PART_LOW + s));
+            SetMaterialShaderUniformVec4(oCreature, s, "PartHigh", GetLocalFloat(oCreature, WTHR_VAR_PART_HIGH + s));
+            SetMaterialShaderUniformVec4(oCreature, s, "WoundWeight", GetLocalFloat(oCreature, WTHR_VAR_PART_WND + s));
+            SetMaterialShaderUniformVec4(oCreature, s, "SpatterWeight", GetLocalFloat(oCreature, WTHR_VAR_PART_SPT + s));
+            string sMesh = GetLocalString(oCreature, WTHR_VAR_PART_MESH + s);
+            int nMid = FindSubString(sMesh, "_");
+            if (nMid > 0)
+            {
+                SetMaterialShaderUniformVec4(oCreature, s, "MeshBase", StringToFloat(GetStringLeft(sMesh, nMid)));
+                SetMaterialShaderUniformVec4(oCreature, s, "MeshHeight", StringToFloat(GetSubString(sMesh, nMid + 1, 16)));
+            }
+            DeleteLocalInt(oCreature, WTHR_VAR_PART + s);
+            DeleteLocalFloat(oCreature, WTHR_VAR_PART_LOW + s);
+            DeleteLocalFloat(oCreature, WTHR_VAR_PART_HIGH + s);
+            DeleteLocalFloat(oCreature, WTHR_VAR_PART_WND + s);
+            DeleteLocalFloat(oCreature, WTHR_VAR_PART_SPT + s);
+            DeleteLocalString(oCreature, WTHR_VAR_PART_MESH + s);
+        }
         nStart = nSep + 1;
         nSep = FindSubString(sList, ";", nStart);
     }
@@ -348,6 +484,7 @@ void WthrSend(object oCreature, int bNewLook = FALSE, int bForce = FALSE)
         SetLocalString(oCreature, WTHR_VAR_MATERIALS, sList);
         bForce = TRUE;
     }
+    if (bForce) WthrSendParts(oCreature, sList);
     WthrPush(oCreature, sList, WTHR_PARAM_DUST, WTHR_VAR_DUST, bForce);
     WthrPush(oCreature, sList, WTHR_PARAM_SPREAD, WTHR_VAR_SPREAD, bForce);
     WthrPush(oCreature, sList, WTHR_PARAM_SNOW, WTHR_VAR_SNOW, bForce);

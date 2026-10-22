@@ -20,6 +20,10 @@ and records which textures each one uses:
 - wthr_<part>.2da   one per body part; row = part number, column = model
                     prefix such as pmd0 (male dwarf, normal phenotype)
 - wthr_appear.2da   row = appearance.2da row, TEXTURES column, for monsters
+- wthr_cloak.2da    row = cloakmodel.2da row: TEXTURES, and per model
+                    prefix where that cloak hangs on the figure
+- wthr_parts.2da    row = part (CREATURE_PART_*, then the cloak, 21): its
+                    height range and how much blood it catches
 Cells hold texture names joined by ";".
 
 The game is found as described in tools/nwn_paths.py (NWN_ROOT, else Steam).
@@ -57,6 +61,14 @@ RES_SIZE = 8
 PARTS = ["footr", "footl", "shinr", "shinl", "legl", "legr", "pelvis", "chest", "belt", "neck",
          "forer", "forel", "bicepr", "bicepl", "shor", "shol", "handr", "handl", "robe", "head"]
 PART_MODEL = re.compile(r"^(p[mf][a-z]\d+)_(" + "|".join(PARTS) + r")(\d{3})$")
+# Cloaks are items with models of their own, <prefix>_cloak_NNN; their row
+# in wthr_parts.2da follows the body parts and the head (20). Helmets get
+# no material: the engine doesn't pass a creature's material values on to
+# its helmet (nor takes them from the helmet item), so they couldn't change.
+CLOAK = "cloak"
+CLOAK_MODEL = re.compile(r"^(p[mf][a-z]\d+)_cloak_(\d{3})$")
+SKELETON_MODEL = re.compile(r"^p[mf][a-z]\d+$")
+PART_ROWS = PARTS[:19] + [None, "head", CLOAK]
 
 # Where each body part sits on a standing figure, as a share of its height
 # (feet 0, top of the head 1). The shader grades within each part from its
@@ -72,6 +84,10 @@ PART_HEIGHT = {
     "chest": (0.56, 0.82), "shor": (0.76, 0.86), "shol": (0.76, 0.86),
     "neck": (0.8, 0.87), "head": (0.85, 1.0),
     "robe": (0.05, 0.85),
+    # A cloak is a skin mesh, which the engine gives no bounding box: its
+    # height comes from where it hangs on the figure (MeshBase, MeshHeight
+    # in the material). This range is only the fallback.
+    CLOAK: (0.1, 0.82),
 }
 WHOLE_BODY = (0.0, 1.0)  # monsters: one texture covers everything
 
@@ -89,6 +105,7 @@ PART_BLOOD = {
     "chest": (1.0, 0.6), "shor": (0.6, 0.4), "shol": (0.6, 0.4),
     "neck": (0.5, 0.45), "head": (0.4, 0.45),
     "robe": (0.8, 0.4),
+    CLOAK: (0.5, 0.3),
 }
 MONSTER_BLOOD = (0.8, 0.6)
 
@@ -107,8 +124,11 @@ OBJECT_TABLES = [
 NOISE_TEXTURE = "wthr_noise"
 NOISE_SIZE = 256
 
-# Values the scripts set per creature start at 0; PartLow/PartHigh and the
-# blood weights are fixed per texture. texture4 is the noise (the shader's
+# Values the scripts set per creature start at 0. PartLow/PartHigh, the
+# blood weights and MeshBase/MeshHeight are each texture's defaults; for
+# player-shaped creatures the scripts send the values of the parts the
+# texture is on for that creature (wthr_parts.2da), since one texture can
+# serve a thigh in one armour and a shoulder pad in another. texture4 is the noise (the shader's
 # height-map slot). Shaders: vs_/fs_weather have the environment map, as
 # creature textures need (their alpha is shininess: metal armour);
 # vs_/fs_wthr_plain don't, for placeables and doors, whose alpha is
@@ -131,6 +151,8 @@ parameter float PartHigh {high}
 parameter float WoundWeight {wounds}
 parameter float SpatterWeight {spatter}
 parameter float SpatterFront {front}
+parameter float MeshBase {base}
+parameter float MeshHeight {height}
 """
 
 # The clothes brush: a small misc item ("Rags" look) with Unique Power Self
@@ -249,6 +271,39 @@ def ascii_model_textures(text, textures):
     return names
 
 
+def ascii_node_heights(text):
+    """{node name: (height above the model's origin, node type, bitmap)}
+    for a model in the ASCII format, adding up the positions of each node's
+    parents (the figures stand upright, so rotations are left out)."""
+    nodes, name = {}, None
+    for line in text.splitlines():
+        words = line.split()
+        if not words:
+            continue
+        key = words[0].lower()
+        if key in ("endmodelgeom", "newanim"):
+            break  # animations name the same nodes again
+        if key == "node" and len(words) > 2:
+            name = words[2].lower()
+            nodes[name] = {"type": words[1].lower(), "parent": None, "z": 0.0, "bitmap": None}
+        elif key == "endnode":
+            name = None
+        elif name and key == "parent" and len(words) > 1:
+            nodes[name]["parent"] = words[1].lower()
+        elif name and key == "position" and len(words) > 3:
+            nodes[name]["z"] = float(words[3])
+        elif name and key == "bitmap" and len(words) > 1:
+            nodes[name]["bitmap"] = words[1].lower()
+
+    def height(n, depth=0):
+        node = nodes.get(n)
+        if node is None or depth > 64:
+            return 0.0
+        return node["z"] + height(node["parent"], depth + 1)
+
+    return {n: (height(n), node["type"], node["bitmap"]) for n, node in nodes.items()}
+
+
 def model_textures(blob, textures):
     """Texture names on the drawn meshes of a model, in node order.
     Emitters and walkmeshes are left out: their textures must keep the
@@ -281,7 +336,7 @@ def scan_game():
     """(textures, models, stock materials, {2da name: rows}, textures whose
     .txi asks for an environment map) of the game."""
     textures, models, stock_materials, shiny = set(), {}, set(), set()
-    wanted = {"appearance"} | {t[0] for t in OBJECT_TABLES}
+    wanted = {"appearance", "cloakmodel"} | {t[0] for t in OBJECT_TABLES}
     found = {}
     for resref, rtype, bif, idx in nwn_key.all_entries():
         if rtype in (T_TGA, T_DDS, T_PLT):
@@ -318,11 +373,42 @@ def build_object_tables(textures, models, game_tables, used):
     return tables
 
 
-def build_tables(textures, models, appearance_rows):
-    """(2DA files as {resref: text}, {texture: body part, or None for a
-    monster} for every texture used). A texture shared by several parts
-    keeps the first part."""
-    used = {}
+FOOT_DEPTH = 0.14  # metres from a foot bone down to the sole
+
+
+def figure_heights(models):
+    """{model prefix: (ground, top of the head)} in model space, from the
+    skeleton models (pmh0, pfd2, ...). Their "head" node sits at the top of
+    the head; the smaller races stand with their feet above the model's
+    origin."""
+    out = {}
+    for name, loc in models.items():
+        if not SKELETON_MODEL.match(name):
+            continue
+        blob = nwn_key.read_bif_resource(*loc)
+        if blob.startswith(b"\0"):
+            continue  # binary: only pmh1, which has no cloaks
+        nodes = ascii_node_heights(blob.decode("latin-1"))
+        if "head" in nodes and "lfoot_g" in nodes and nodes["head"][0] > 0.1:
+            out[name] = (nodes["lfoot_g"][0] - FOOT_DEPTH, nodes["head"][0])
+    return out
+
+
+def own_part(texture, parts):
+    """The part whose defaults a texture shared by several parts gets in its
+    material: the part it is named after (pmh0_pelvis001 also dresses some
+    robes), else the first one found."""
+    for p in parts:
+        if re.search(r"_" + p + r"\d", texture):
+            return p
+    return parts[0]
+
+
+def build_tables(textures, models, game_tables):
+    """(2DA files as {resref: text}, {texture: body part, None for a
+    monster}, {cloak texture: (MeshBase, MeshHeight)} for every texture
+    used)."""
+    users = {}  # texture: the parts it is on, in the order found
 
     # Player body parts: {part: {prefix: {number: textures}}}
     parts = {p: {} for p in PARTS}
@@ -335,7 +421,7 @@ def build_tables(textures, models, appearance_rows):
         if tex:
             parts[part].setdefault(prefix, {})[number] = tex
             for t in tex:
-                used.setdefault(t, part)
+                users.setdefault(t, []).append(part)
 
     tables = {}
     for part, by_prefix in parts.items():
@@ -347,9 +433,61 @@ def build_tables(textures, models, appearance_rows):
             lines.append(f"{row} " + " ".join(cells))
         tables["wthr_" + part] = "\n".join(lines) + "\n"
 
+    # Cloaks: cloakmodel.2da gives each cloak appearance a model
+    # (<prefix>_cloak_NNN, a skin mesh per race, gender and phenotype) and a
+    # texture (cloak_NNN), which replaces the model's own. A skin mesh has no
+    # bounding box, so the shader places a cloak's vertex on the figure at
+    # (MeshBase + its height in the mesh) / MeshHeight: wthr_cloak holds the
+    # texture and "MeshBase_MeshHeight" per model prefix.
+    figure = figure_heights(models)
+    hangs = {}  # (prefix, model number): (MeshBase, MeshHeight)
+    for name, loc in sorted(models.items()):
+        m = CLOAK_MODEL.match(name)
+        if not m or m.group(1) not in figure:
+            continue
+        blob = nwn_key.read_bif_resource(*loc)
+        if blob.startswith(b"\0"):
+            continue
+        skins = [z for z, kind, _ in ascii_node_heights(blob.decode("latin-1")).values() if kind == "skin"]
+        if skins:
+            ground, top = figure[m.group(1)]
+            hangs[(m.group(1), int(m.group(2)))] = (skins[0] - ground, top - ground)
+    prefixes = sorted({p for p, _ in hangs})
+    mesh = {}
+    lines = ["2DA V2.0", "", "    TEXTURES " + " ".join(prefixes)]
+    for row, cells in enumerate(game_tables.get("cloakmodel", [])):
+        try:
+            model, texture = int(cells.get("MODEL", "")), int(cells.get("TEXTURE", ""))
+        except ValueError:
+            model, texture = 0, 0
+        tex = f"cloak_{texture:03d}"
+        if model <= 0 or tex not in textures:
+            lines.append(f"{row} " + " ".join(["****"] * (len(prefixes) + 1)))
+            continue
+        users.setdefault(tex, []).append(CLOAK)
+        if ("pmh0", model) in hangs and tex not in mesh:
+            mesh[tex] = hangs[("pmh0", model)]
+        z = [f"{hangs[(p, model)][0]:.3f}_{hangs[(p, model)][1]:.3f}" if (p, model) in hangs else "****"
+             for p in prefixes]
+        lines.append(f"{row} {tex} " + " ".join(z))
+    tables["wthr_cloak"] = "\n".join(lines) + "\n"
+
+    # The defaults of each part, for the scripts (rows as CREATURE_PART_*,
+    # then the cloak).
+    lines = ["2DA V2.0", "", "    LOW HIGH WOUNDS SPATTER"]
+    for row, part in enumerate(PART_ROWS):
+        if part is None:
+            lines.append(f"{row} **** **** **** ****")
+            continue
+        (low, high), (wounds, spatter) = PART_HEIGHT[part], PART_BLOOD[part]
+        lines.append(f"{row} {low:.2f} {high:.2f} {wounds:.2f} {spatter:.2f}")
+    tables["wthr_parts"] = "\n".join(lines) + "\n"
+
+    used = {t: own_part(t, ps) for t, ps in users.items()}
+
     # Monsters: the model is the RACE column of appearance.2da.
     lines = ["2DA V2.0", "", "    TEXTURES"]
-    for row, cells in enumerate(appearance_rows):
+    for row, cells in enumerate(game_tables["appearance"]):
         model = cells.get("RACE", "****").lower()
         tex = []
         if cells.get("MODELTYPE", "").upper() != "P" and model in models:
@@ -358,7 +496,7 @@ def build_tables(textures, models, appearance_rows):
                 used.setdefault(t, None)
         lines.append(f"{row} " + (";".join(tex) or "****"))
     tables["wthr_appear"] = "\n".join(lines) + "\n"
-    return tables, used
+    return tables, used, mesh
 
 
 # ---- Generated content -----------------------------------------------------
@@ -482,9 +620,10 @@ def noise_tga():
     return header + bytes(pixels)
 
 
-def material(part, shiny=True):
+def material(part, shiny=True, mesh=(0.0, 0.0)):
     """The material for a texture of a body part, a monster (None) or an
-    object (OBJECT); shiny: with the environment map."""
+    object (OBJECT); shiny: with the environment map; mesh: MeshBase and
+    MeshHeight of a cloak (0: the mesh's bounding box is used)."""
     if part == OBJECT:
         (low, high), (wounds, spatter), front = WHOLE_BODY, OBJECT_BLOOD, 0.0
     elif part:
@@ -493,7 +632,8 @@ def material(part, shiny=True):
         (low, high), (wounds, spatter), front = WHOLE_BODY, MONSTER_BLOOD, 0.75
     vs, fs = ("vs_weather", "fs_weather") if shiny else ("vs_wthr_plain", "fs_wthr_plain")
     return MATERIAL.format(vs=vs, fs=fs, noise=NOISE_TEXTURE, low=f"{low:.2f}", high=f"{high:.2f}",
-                           wounds=f"{wounds:.2f}", spatter=f"{spatter:.2f}", front=f"{front:.2f}")
+                           wounds=f"{wounds:.2f}", spatter=f"{spatter:.2f}", front=f"{front:.2f}",
+                           base=f"{mesh[0]:.3f}", height=f"{mesh[1]:.3f}")
 
 
 def brush_uti():
@@ -563,7 +703,7 @@ def main():
 
     print("reading the game's creature models...")
     textures, models, stock_materials, game_tables, shiny = scan_game()
-    tables, used = build_tables(textures, models, game_tables["appearance"])
+    tables, used, mesh = build_tables(textures, models, game_tables)
     print("reading the game's placeable and door models...")
     tables.update(build_object_tables(textures, models, game_tables, used))
     # A texture that already has a stock material keeps it (the old heads).
@@ -574,7 +714,9 @@ def main():
     entries = read_file_entries(files(SHADERS, ".shd"))
     entries.append((NOISE_TEXTURE, "tga", noise_tga()))
     entries += [(name, "2da", text.encode("ascii")) for name, text in sorted(tables.items())]
-    entries += [(name, "mtr", material(used[name], used[name] != OBJECT or name in shiny).encode("ascii")) for name in materials]
+    entries += [(name, "mtr", material(used[name], used[name] != OBJECT or name in shiny,
+                                             mesh.get(name, (0.0, 0.0))).encode("ascii"))
+                for name in materials]
     write_erf(HAK_OUT, entries, b"HAK ")
     print("Copy nwn_weathered.hak to your NWN hak folder and import nwn_weathered.erf into your module.")
 
