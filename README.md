@@ -10,7 +10,7 @@ Dust, snow and blood on characters, monsters, placeables and doors in Neverwinte
 - **Per creature, in multiplayer:** the look belongs to the creature, so every player sees the same dusty traveller.
 - **Designer-controlled:** nothing is detected from tilesets. You decide where dust and snow build up, what the weather does, and how the area's own creatures start out.
 
-Status: dust and snow work in game, including movement. Blood is new and untested.
+Status: dust, snow and blood all work in game, including movement.
 
 ## Who changes over time
 
